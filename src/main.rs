@@ -12,21 +12,39 @@ use syntect::parsing::SyntaxSet;
 
 #[derive(Parser)]
 #[command(name = "nit", about = "Terminal code review tool")]
-struct Cli {}
+struct Cli {
+    /// Commit, range (abc..def), or nothing for uncommitted changes
+    rev: Option<String>,
+}
 
 fn main() -> Result<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
 
     let repo = git::open_repo()?;
-    let mut diff = git::get_uncommitted_diff(&repo)?;
-    let branch = git::branch_name(&repo);
+
+    let (mut diff, label) = match cli.rev {
+        None => {
+            let diff = git::get_uncommitted_diff(&repo)?;
+            let branch = git::branch_name(&repo);
+            (diff, branch)
+        }
+        Some(ref rev) if rev.contains("..") => {
+            let parts: Vec<&str> = rev.splitn(2, "..").collect();
+            let diff = git::get_range_diff(&repo, parts[0], parts[1])?;
+            (diff, rev.clone())
+        }
+        Some(ref rev) => {
+            let diff = git::get_commit_diff(&repo, rev)?;
+            (diff, rev.clone())
+        }
+    };
 
     let ss = SyntaxSet::load_defaults_newlines();
     let ts = ThemeSet::load_defaults();
     let theme = &ts.themes["base16-ocean.dark"];
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut diff, &branch, &ss, theme);
+    let result = run(&mut terminal, &mut diff, &label, &ss, theme);
     ratatui::restore();
 
     result
