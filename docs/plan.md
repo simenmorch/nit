@@ -269,6 +269,73 @@ All initial questions resolved. New questions may arise during implementation.
 
 1. **Phase 1 — Local MVP:** (see above)
 2. **Phase 1.5 — Polish:** Syntax highlighting via syntect, commit/range viewing
-3. **Phase 2 — GitHub read-only:** Fetch PR diffs/comments via octocrab, show inline
-4. **Phase 3 — GitHub interactive:** Post comments, submit reviews, mark files viewed
+3. **Phase 2 — Provider-based PR viewing (read-only):** (see below)
+4. **Phase 3 — PR interactive:** Post comments, submit reviews, mark files viewed
 5. **Phase 4 — Polish:** Side-by-side view, search, large file handling, config/keybindings
+
+---
+
+## Phase 2 — Provider-based PR Viewing (read-only)
+
+### Design
+
+Multi-provider architecture. A `ReviewProvider` trait defines the interface for fetching PR data. Each hosting provider (GitHub, GitLab, Bitbucket, etc.) implements this trait. The rest of the app only interacts through the trait — TUI, app state, and rendering are provider-agnostic.
+
+Provider detection is automatic: `nit #42` reads the git remote URL and selects the right provider. Explicit override possible for repos with multiple remotes or non-standard setups.
+
+### Provider Trait (sketch)
+
+```rust
+trait ReviewProvider {
+    fn fetch_diff(&self, pr_id: &str) -> Result<Diff>;
+    fn fetch_comments(&self, pr_id: &str) -> Result<Vec<Comment>>;
+    fn fetch_pr_metadata(&self, pr_id: &str) -> Result<PrMetadata>;
+}
+```
+
+### Data Model Additions
+
+```rust
+struct Comment {
+    author: String,
+    body: String,
+    created_at: String,
+    path: String,           // file the comment is on
+    line: Option<usize>,    // line number (None for file-level comments)
+}
+
+struct PrMetadata {
+    title: String,
+    author: String,
+    state: PrState,         // Open, Merged, Closed
+    base_branch: String,
+    head_branch: String,
+}
+
+enum PrState {
+    Open,
+    Merged,
+    Closed,
+}
+```
+
+### Implementation Steps
+
+**Step 1 — Provider trait + model**
+Define the `ReviewProvider` trait and data model for comments/PR metadata in new modules. No API calls yet — just the abstraction layer.
+*Rust concepts:* traits, `Box<dyn Trait>`, defining interfaces.
+
+**Step 2 — GitHub implementation**
+Add `octocrab` and `tokio`. Implement `ReviewProvider` for GitHub: fetch PR diff and produce our `Diff` model.
+*Rust concepts:* `async`/`await`, tokio runtime, working with REST API crates.
+
+**Step 3 — Remote detection**
+Parse the git remote URL to infer provider type and `owner/repo`. `nit #42` auto-detects from the `origin` remote. Supports github.com, gitlab.com, bitbucket.org.
+*Rust concepts:* string parsing, enum dispatch.
+
+**Step 4 — Fetch and display comments**
+Fetch review comments via the provider trait, attach to relevant diff lines, render inline in the TUI below the commented line.
+*Rust concepts:* extending the data model, conditional TUI rendering.
+
+**Step 5 — PR metadata display**
+Fetch and display PR title, author, state (open/merged/closed), and branch info in the status bar or a header area.
