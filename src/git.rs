@@ -41,6 +41,66 @@ pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
         .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
         .context("failed to compute diff")?;
 
+    build_diff(&diff)
+}
+
+/// Diff a single commit against its parent.
+pub fn get_commit_diff(repo: &Repository, rev: &str) -> Result<model::Diff> {
+    let obj = repo
+        .revparse_single(rev)
+        .with_context(|| format!("could not resolve '{}'", rev))?;
+
+    let commit = obj
+        .peel_to_commit()
+        .with_context(|| format!("'{}' is not a commit", rev))?;
+
+    let new_tree = commit.tree().context("failed to get commit tree")?;
+
+    // Get parent tree (None for root commit = diff against empty tree)
+    let parent_tree = if commit.parent_count() > 0 {
+        Some(commit.parent(0)?.tree()?)
+    } else {
+        None
+    };
+
+    let mut opts = DiffOptions::new();
+    opts.context_lines(5);
+
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&new_tree), Some(&mut opts))
+        .context("failed to compute commit diff")?;
+
+    build_diff(&diff)
+}
+
+/// Diff between two revisions.
+pub fn get_range_diff(repo: &Repository, from: &str, to: &str) -> Result<model::Diff> {
+    let from_obj = repo
+        .revparse_single(from)
+        .with_context(|| format!("could not resolve '{}'", from))?;
+    let to_obj = repo
+        .revparse_single(to)
+        .with_context(|| format!("could not resolve '{}'", to))?;
+
+    let from_tree = from_obj
+        .peel_to_tree()
+        .with_context(|| format!("'{}' does not point to a tree", from))?;
+    let to_tree = to_obj
+        .peel_to_tree()
+        .with_context(|| format!("'{}' does not point to a tree", to))?;
+
+    let mut opts = DiffOptions::new();
+    opts.context_lines(5);
+
+    let diff = repo
+        .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut opts))
+        .context("failed to compute range diff")?;
+
+    build_diff(&diff)
+}
+
+/// Convert a git2 Diff into our model.
+fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
     let mut files: Vec<model::DiffFile> = Vec::new();
 
     for delta_idx in 0..diff.deltas().len() {
@@ -73,7 +133,7 @@ pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
         let mut removed: usize = 0;
 
         if !is_binary {
-            let patch = git2::Patch::from_diff(&diff, delta_idx)
+            let patch = git2::Patch::from_diff(diff, delta_idx)
                 .context("failed to get patch")?;
 
             if let Some(patch) = patch {
