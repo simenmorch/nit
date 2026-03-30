@@ -8,6 +8,14 @@ pub fn open_repo() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent)")
 }
 
+/// Get the current branch name, or "HEAD" if detached.
+pub fn branch_name(repo: &Repository) -> String {
+    repo.head()
+        .ok()
+        .and_then(|h| h.shorthand().map(String::from))
+        .unwrap_or_else(|| "HEAD".to_string())
+}
+
 /// Get the HEAD commit's tree, or None if the repo has no commits yet.
 fn head_tree(repo: &Repository) -> Result<Option<git2::Tree<'_>>> {
     match repo.head() {
