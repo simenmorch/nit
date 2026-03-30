@@ -7,6 +7,8 @@ use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::DefaultTerminal;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
 
 #[derive(Parser)]
 #[command(name = "nit", about = "Terminal code review tool")]
@@ -19,18 +21,28 @@ fn main() -> Result<()> {
     let mut diff = git::get_uncommitted_diff(&repo)?;
     let branch = git::branch_name(&repo);
 
+    let ss = SyntaxSet::load_defaults_newlines();
+    let ts = ThemeSet::load_defaults();
+    let theme = &ts.themes["base16-ocean.dark"];
+
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut diff, &branch);
+    let result = run(&mut terminal, &mut diff, &branch, &ss, theme);
     ratatui::restore();
 
     result
 }
 
-fn run(terminal: &mut DefaultTerminal, diff: &mut model::Diff, branch: &str) -> Result<()> {
+fn run(
+    terminal: &mut DefaultTerminal,
+    diff: &mut model::Diff,
+    branch: &str,
+    ss: &SyntaxSet,
+    theme: &syntect::highlighting::Theme,
+) -> Result<()> {
     let mut app = app::App::new();
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, diff, branch))?;
+        terminal.draw(|frame| ui::draw(frame, &app, diff, branch, ss, theme))?;
 
         let viewport_height = terminal.size()?.height as usize;
         let content_height = diff
