@@ -8,6 +8,45 @@ pub fn open_repo() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent)")
 }
 
+/// Parse owner/repo from the origin remote URL.
+/// Supports SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
+pub fn owner_repo_from_remote(repo: &Repository) -> Result<(String, String)> {
+    let remote = repo
+        .find_remote("origin")
+        .context("no 'origin' remote found")?;
+
+    let url = remote.url().context("remote URL is not valid UTF-8")?;
+
+    parse_remote_url(url)
+}
+
+fn parse_remote_url(url: &str) -> Result<(String, String)> {
+    // SSH: git@github.com:owner/repo.git
+    if let Some(path) = url.strip_prefix("git@").and_then(|s| s.split(':').nth(1)) {
+        let path = path.strip_suffix(".git").unwrap_or(path);
+        let parts: Vec<&str> = path.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    // HTTPS: https://github.com/owner/repo.git
+    if url.starts_with("https://") || url.starts_with("http://") {
+        let path = url
+            .split("://")
+            .nth(1)
+            .and_then(|s| s.splitn(2, '/').nth(1))
+            .unwrap_or("");
+        let path = path.strip_suffix(".git").unwrap_or(path);
+        let parts: Vec<&str> = path.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    anyhow::bail!("could not parse owner/repo from remote URL: {}", url)
+}
+
 /// Get the current branch name, or "HEAD" if detached.
 pub fn branch_name(repo: &Repository) -> String {
     repo.head()
