@@ -1,11 +1,12 @@
 mod app;
+mod config;
 mod git;
 mod github;
 mod model;
 mod provider;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::DefaultTerminal;
@@ -50,12 +51,24 @@ fn main() -> Result<()> {
         }
     };
 
+    let cfg = config::load()?;
+
     let ss = SyntaxSet::load_defaults_newlines();
     let ts = ThemeSet::load_defaults();
-    let theme = &ts.themes["base16-ocean.dark"];
+
+    let theme = if let Some(ref path) = cfg.theme.syntax_file {
+        ThemeSet::get_theme(path)
+            .with_context(|| format!("failed to load theme from {}", path))?
+    } else {
+        ts.themes
+            .get(&cfg.theme.syntax)
+            .cloned()
+            .with_context(|| format!("unknown theme '{}'. Available: {}", cfg.theme.syntax,
+                ts.themes.keys().cloned().collect::<Vec<_>>().join(", ")))?
+    };
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut diff, &label, &ss, theme);
+    let result = run(&mut terminal, &mut diff, &label, &ss, &theme);
     ratatui::restore();
 
     result
