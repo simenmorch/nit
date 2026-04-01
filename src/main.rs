@@ -94,6 +94,18 @@ fn run(
             .unwrap_or(0);
 
         if let Event::Key(key) = event::read()? {
+            // Search input mode — capture keystrokes for the query
+            if app.searching {
+                match key.code {
+                    KeyCode::Enter => app.submit_search(diff),
+                    KeyCode::Esc => app.cancel_search(),
+                    KeyCode::Backspace => { app.search_input.pop(); }
+                    KeyCode::Char(c) => app.search_input.push(c),
+                    _ => {}
+                }
+                continue;
+            }
+
             // Handle gg (two-key combo)
             if app.g_pressed {
                 app.g_pressed = false;
@@ -113,6 +125,9 @@ fn run(
                     app.jump_to_bottom(diff.files.len(), content_height);
                     continue;
                 }
+                KeyCode::Char('/') => { app.start_search(); continue; }
+                KeyCode::Char('n') => { app.next_match(viewport_height); continue; }
+                KeyCode::Char('N') => { app.prev_match(viewport_height); continue; }
                 _ => {}
             }
 
@@ -122,6 +137,7 @@ fn run(
                     KeyCode::Char('j') | KeyCode::Down => app.select_next(diff.files.len()),
                     KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
                     KeyCode::Enter | KeyCode::Char('l') => app.focus_diff(),
+                    KeyCode::Esc => app.clear_search(),
                     _ => {}
                 },
                 app::Focus::Diff => match key.code {
@@ -129,7 +145,8 @@ fn run(
                         app.scroll_down(content_height, viewport_height);
                     }
                     KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
-                    KeyCode::Char('h') | KeyCode::Esc => app.focus_sidebar(),
+                    KeyCode::Char('h') => app.focus_sidebar(),
+                    KeyCode::Esc => app.clear_search(),
                     _ => {}
                 },
             }
