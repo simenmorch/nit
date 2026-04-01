@@ -21,12 +21,15 @@ impl GitHubProvider {
     pub fn new(owner: String, repo: String) -> Result<Self> {
         let token = resolve_token()?;
 
-        let client = Octocrab::builder()
-            .personal_token(token)
-            .build()
-            .context("failed to build GitHub client")?;
-
         let rt = Runtime::new().context("failed to create tokio runtime")?;
+
+        // Octocrab uses tower internally, which requires a tokio runtime context
+        let client = rt.block_on(async {
+            Octocrab::builder()
+                .personal_token(token)
+                .build()
+                .context("failed to build GitHub client")
+        })?;
 
         Ok(Self { owner, repo, client, rt })
     }
