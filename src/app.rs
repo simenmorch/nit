@@ -199,7 +199,7 @@ impl App {
         }
     }
 
-    pub fn jump_to_bottom(&mut self, visible: &[FlatEntry], content_height: usize) {
+    pub fn jump_to_bottom(&mut self, visible: &[FlatEntry], content_height: usize, viewport_height: usize) {
         match self.focus {
             Focus::Sidebar => {
                 if !visible.is_empty() {
@@ -208,7 +208,7 @@ impl App {
                 }
             }
             Focus::Diff => {
-                self.scroll = content_height;
+                self.scroll = content_height.saturating_sub(viewport_height);
             }
         }
     }

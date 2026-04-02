@@ -133,7 +133,7 @@ fn handle_key(
         KeyCode::Char('v') => { app.toggle_viewed_entry(diff, visible); return KeyAction::Continue; }
         KeyCode::Char('g') => { app.g_pressed = true; return KeyAction::Continue; }
         KeyCode::Char('G') => {
-            app.jump_to_bottom(visible, content_height);
+            app.jump_to_bottom(visible, content_height, viewport_height);
             return KeyAction::Continue;
         }
         KeyCode::Char('/') => { app.start_search(); return KeyAction::Continue; }
