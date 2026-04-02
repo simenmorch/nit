@@ -10,13 +10,13 @@ use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
 
 use crate::app::{App, Focus};
+use crate::config::ColorsConfig;
 use crate::model;
 use crate::tree::{FlatEntry, FlatEntryKind};
 
 const SIDEBAR_WIDTH: u16 = 40;
-const SEARCH_HIGHLIGHT_BG: Color = Color::Rgb(120, 100, 30);
-const SEARCH_CURRENT_BG: Color = Color::Rgb(180, 140, 20);
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -25,12 +25,17 @@ pub fn draw(
     branch: &str,
     ss: &SyntaxSet,
     theme: &Theme,
+    colors: &ColorsConfig,
 ) {
     let area = frame.area();
 
+    if let Some(bg) = colors.bg {
+        frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
+    }
+
     if diff.files.is_empty() {
         let message = Paragraph::new("No uncommitted changes.")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(colors.fg_muted))
             .block(Block::default().borders(Borders::ALL).title(" nit "));
         frame.render_widget(message, area);
         return;
@@ -50,16 +55,16 @@ pub fn draw(
             ])
             .split(outer[0]);
 
-        draw_sidebar(frame, app, diff, visible, panels[0]);
-        draw_file_diff(frame, app, diff, panels[1], ss, theme);
+        draw_sidebar(frame, app, diff, visible, panels[0], colors);
+        draw_file_diff(frame, app, diff, panels[1], ss, theme, colors);
     } else {
-        draw_file_diff(frame, app, diff, outer[0], ss, theme);
+        draw_file_diff(frame, app, diff, outer[0], ss, theme, colors);
     }
 
     if app.searching {
-        draw_search_input(frame, app, outer[1]);
+        draw_search_input(frame, app, outer[1], colors);
     } else {
-        draw_status_bar(frame, app, diff, branch, outer[1]);
+        draw_status_bar(frame, app, diff, branch, outer[1], colors);
     }
 }
 
@@ -82,6 +87,7 @@ fn draw_sidebar(
     diff: &model::Diff,
     visible: &[FlatEntry],
     area: Rect,
+    colors: &ColorsConfig,
 ) {
     let is_focused = matches!(app.focus, Focus::Sidebar);
 
@@ -100,18 +106,18 @@ fn draw_sidebar(
                     let (added, removed) = folder_stats(diff, path);
                     let stats = format!("+{} -{}", added, removed);
                     let name_style = if is_selected {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::Yellow)
+                        Style::default().fg(colors.fg_accent)
                     };
                     Line::from(vec![
-                        Span::styled(viewed, Style::default().fg(Color::Green)),
+                        Span::styled(viewed, Style::default().fg(colors.fg_added)),
                         Span::raw(marker),
                         Span::raw(indent),
-                        Span::styled(arrow, Style::default().fg(Color::DarkGray)),
+                        Span::styled(arrow, Style::default().fg(colors.fg_muted)),
                         Span::styled(format!("{}/", name), name_style),
                         Span::raw("  "),
-                        Span::styled(stats, Style::default().fg(Color::DarkGray)),
+                        Span::styled(stats, Style::default().fg(colors.fg_muted)),
                     ])
                 }
                 FlatEntryKind::File { file_index, name } => {
@@ -119,18 +125,18 @@ fn draw_sidebar(
                     let viewed = if file.viewed { "✓ " } else { "  " };
                     let stats = format!("+{} -{}", file.added, file.removed);
                     let name_style = if is_selected {
-                        Style::default().fg(Color::Cyan)
+                        Style::default().fg(colors.fg_selected)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(colors.fg)
                     };
                     Line::from(vec![
-                        Span::styled(viewed, Style::default().fg(Color::Green)),
+                        Span::styled(viewed, Style::default().fg(colors.fg_added)),
                         Span::raw(marker),
                         Span::raw(indent),
                         Span::raw("  "), // align with folder names (arrow placeholder)
                         Span::styled(name.clone(), name_style),
                         Span::raw("  "),
-                        Span::styled(stats, Style::default().fg(Color::DarkGray)),
+                        Span::styled(stats, Style::default().fg(colors.fg_muted)),
                     ])
                 }
             }
@@ -138,9 +144,9 @@ fn draw_sidebar(
         .collect();
 
     let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(colors.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(colors.border_unfocused)
     };
 
     let file_list = Paragraph::new(lines)
@@ -162,6 +168,7 @@ fn draw_file_diff(
     area: Rect,
     ss: &SyntaxSet,
     theme: &Theme,
+    colors: &ColorsConfig,
 ) {
     let file = &diff.files[app.selected_file];
     let is_focused = matches!(app.focus, Focus::Diff);
@@ -204,13 +211,13 @@ fn draw_file_diff(
         if line_index >= vis_start {
             let mut hunk_header_spans = vec![Span::styled(
                 hunk.header.trim_end().to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(colors.fg_muted),
             )];
 
             if let Some((ref all, current)) = match_lines {
                 if all.contains(&line_index) {
                     let is_current = current == Some(line_index);
-                    let bg = if is_current { SEARCH_CURRENT_BG } else { SEARCH_HIGHLIGHT_BG };
+                    let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
                     hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
                 }
             }
@@ -230,8 +237,8 @@ fn draw_file_diff(
 
             if line_index >= vis_start {
                 let diff_bg = match line.kind {
-                    model::LineKind::Added => Some(Color::Rgb(30, 60, 30)),
-                    model::LineKind::Removed => Some(Color::Rgb(60, 30, 30)),
+                    model::LineKind::Added => Some(colors.bg_added),
+                    model::LineKind::Removed => Some(colors.bg_removed),
                     model::LineKind::Context => None,
                 };
 
@@ -242,9 +249,9 @@ fn draw_file_diff(
                 };
 
                 let prefix_style = match line.kind {
-                    model::LineKind::Added => Style::default().fg(Color::Green),
-                    model::LineKind::Removed => Style::default().fg(Color::Red),
-                    model::LineKind::Context => Style::default().fg(Color::White),
+                    model::LineKind::Added => Style::default().fg(colors.fg_added),
+                    model::LineKind::Removed => Style::default().fg(colors.fg_removed),
+                    model::LineKind::Context => Style::default().fg(colors.fg),
                 };
                 let prefix_style = if let Some(bg) = diff_bg {
                     prefix_style.bg(bg)
@@ -279,7 +286,7 @@ fn draw_file_diff(
                 if let Some((ref all, current)) = match_lines {
                     if all.contains(&line_index) {
                         let is_current = current == Some(line_index);
-                        let bg = if is_current { SEARCH_CURRENT_BG } else { SEARCH_HIGHLIGHT_BG };
+                        let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
                         spans = highlight_search_in_spans(spans, app, bg);
                     }
                 }
@@ -297,7 +304,7 @@ fn draw_file_diff(
     if file.hunks.is_empty() {
         lines.push(Line::from(Span::styled(
             "Binary file changed",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(colors.fg_muted),
         )));
     }
 
@@ -305,9 +312,9 @@ fn draw_file_diff(
     let title = format!(" {}{} ", file.path, viewed_indicator);
 
     let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(colors.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(colors.border_unfocused)
     };
 
     // No .scroll() needed — we only built visible lines
@@ -365,17 +372,17 @@ fn highlight_search_in_spans(spans: Vec<Span<'_>>, app: &App, bg: Color) -> Vec<
     result
 }
 
-fn draw_search_input(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_search_input(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
     let input = Line::from(vec![
-        Span::styled("/", Style::default().fg(Color::Yellow)),
-        Span::styled(&app.search_input, Style::default().fg(Color::White)),
-        Span::styled("█", Style::default().fg(Color::DarkGray)),
+        Span::styled("/", Style::default().fg(colors.fg_accent)),
+        Span::styled(&app.search_input, Style::default().fg(colors.fg)),
+        Span::styled("█", Style::default().fg(colors.fg_muted)),
     ]);
 
     frame.render_widget(Paragraph::new(input), area);
 }
 
-fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &str, area: Rect) {
+fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &str, area: Rect, colors: &ColorsConfig) {
     let viewed_count = diff.files.iter().filter(|f| f.viewed).count();
     let total_added: usize = diff.files.iter().map(|f| f.added).sum();
     let total_removed: usize = diff.files.iter().map(|f| f.removed).sum();
@@ -397,19 +404,19 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
 
     let status = Line::from(vec![
         Span::raw(" "),
-        Span::styled(branch, Style::default().fg(Color::Magenta)),
+        Span::styled(branch, Style::default().fg(colors.fg_info)),
         Span::raw("  "),
         Span::styled(
             format!("{}/{} viewed", viewed_count, diff.files.len()),
-            Style::default().fg(Color::White),
+            Style::default().fg(colors.fg),
         ),
         Span::raw("  "),
-        Span::styled(format!("+{}", total_added), Style::default().fg(Color::Green)),
+        Span::styled(format!("+{}", total_added), Style::default().fg(colors.fg_added)),
         Span::raw(" "),
-        Span::styled(format!("-{}", total_removed), Style::default().fg(Color::Red)),
-        Span::styled(search_info, Style::default().fg(Color::Yellow)),
+        Span::styled(format!("-{}", total_removed), Style::default().fg(colors.fg_removed)),
+        Span::styled(search_info, Style::default().fg(colors.fg_accent)),
         Span::raw("  "),
-        Span::styled(hints, Style::default().fg(Color::DarkGray)),
+        Span::styled(hints, Style::default().fg(colors.fg_muted)),
     ]);
 
     frame.render_widget(Paragraph::new(status), area);

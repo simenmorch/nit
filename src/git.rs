@@ -25,6 +25,7 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
     if let Some(path) = url.strip_prefix("git@").and_then(|s| s.split(':').nth(1)) {
         let path = path.strip_suffix(".git").unwrap_or(path);
         let parts: Vec<&str> = path.splitn(2, '/').collect();
+
         if parts.len() == 2 {
             return Ok((parts[0].to_string(), parts[1].to_string()));
         }
@@ -37,7 +38,9 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
             .nth(1)
             .and_then(|s| s.splitn(2, '/').nth(1))
             .unwrap_or("");
+
         let path = path.strip_suffix(".git").unwrap_or(path);
+        let test = path.strip_suffix(".git").unwrap_or(path);
         let parts: Vec<&str> = path.splitn(2, '/').collect();
         if parts.len() == 2 {
             return Ok((parts[0].to_string(), parts[1].to_string()));

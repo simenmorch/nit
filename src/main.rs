@@ -71,7 +71,7 @@ fn main() -> Result<()> {
     let tree = tree::FileTree::from_files(&diff.files);
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut diff, &tree, &label, &ss, &theme);
+    let result = run(&mut terminal, &mut diff, &tree, &label, &ss, &theme, &cfg.colors);
     ratatui::restore();
 
     result
@@ -174,6 +174,7 @@ fn run(
     branch: &str,
     ss: &SyntaxSet,
     theme: &syntect::highlighting::Theme,
+    colors: &config::ColorsConfig,
 ) -> Result<()> {
     let mut app = app::App::new();
 
@@ -189,7 +190,7 @@ fn run(
         let sidebar_height = terminal.size()?.height as usize - 1;
         app.ensure_sidebar_visible(sidebar_height);
 
-        terminal.draw(|frame| ui::draw(frame, &app, diff, &visible, branch, ss, theme))?;
+        terminal.draw(|frame| ui::draw(frame, &app, diff, &visible, branch, ss, theme, colors))?;
 
         let viewport_height = terminal.size()?.height as usize;
 
