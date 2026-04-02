@@ -11,6 +11,7 @@ use syntect::parsing::SyntaxSet;
 
 use crate::app::{App, Focus};
 use crate::model;
+use crate::tree::{FlatEntry, FlatEntryKind};
 
 const SIDEBAR_WIDTH: u16 = 40;
 const SEARCH_HIGHLIGHT_BG: Color = Color::Rgb(120, 100, 30);
@@ -20,6 +21,7 @@ pub fn draw(
     frame: &mut Frame,
     app: &App,
     diff: &model::Diff,
+    visible: &[FlatEntry],
     branch: &str,
     ss: &SyntaxSet,
     theme: &Theme,
@@ -48,7 +50,7 @@ pub fn draw(
             ])
             .split(outer[0]);
 
-        draw_sidebar(frame, app, diff, panels[0]);
+        draw_sidebar(frame, app, diff, visible, panels[0]);
         draw_file_diff(frame, app, diff, panels[1], ss, theme);
     } else {
         draw_file_diff(frame, app, diff, outer[0], ss, theme);
@@ -61,30 +63,77 @@ pub fn draw(
     }
 }
 
-fn draw_sidebar(frame: &mut Frame, app: &App, diff: &model::Diff, area: Rect) {
+fn is_folder_viewed(diff: &model::Diff, folder_path: &str) -> bool {
+    let prefix = format!("{}/", folder_path);
+    let files: Vec<_> = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).collect();
+    !files.is_empty() && files.iter().all(|f| f.viewed)
+}
+
+fn folder_stats(diff: &model::Diff, folder_path: &str) -> (usize, usize) {
+    let prefix = format!("{}/", folder_path);
+    let added: usize = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).map(|f| f.added).sum();
+    let removed: usize = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).map(|f| f.removed).sum();
+    (added, removed)
+}
+
+fn draw_sidebar(
+    frame: &mut Frame,
+    app: &App,
+    diff: &model::Diff,
+    visible: &[FlatEntry],
+    area: Rect,
+) {
     let is_focused = matches!(app.focus, Focus::Sidebar);
 
-    let lines: Vec<Line> = diff
-        .files
+    let lines: Vec<Line> = visible
         .iter()
         .enumerate()
-        .map(|(i, file)| {
+        .map(|(i, entry)| {
             let is_selected = i == app.selected;
             let marker = if is_selected { "▸ " } else { "  " };
-            let viewed = if file.viewed { "✓ " } else { "  " };
-            let stats = format!("+{} -{}", file.added, file.removed);
-            let path_style = if is_selected {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            Line::from(vec![
-                Span::styled(viewed, Style::default().fg(Color::Green)),
-                Span::raw(marker),
-                Span::styled(&file.path, path_style),
-                Span::raw("  "),
-                Span::styled(stats, Style::default().fg(Color::DarkGray)),
-            ])
+            let indent = "  ".repeat(entry.depth);
+
+            match &entry.kind {
+                FlatEntryKind::Folder { path, name, expanded } => {
+                    let viewed = if is_folder_viewed(diff, path) { "✓ " } else { "  " };
+                    let arrow = if *expanded { "▾ " } else { "▸ " };
+                    let (added, removed) = folder_stats(diff, path);
+                    let stats = format!("+{} -{}", added, removed);
+                    let name_style = if is_selected {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Yellow)
+                    };
+                    Line::from(vec![
+                        Span::styled(viewed, Style::default().fg(Color::Green)),
+                        Span::raw(marker),
+                        Span::raw(indent),
+                        Span::styled(arrow, Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{}/", name), name_style),
+                        Span::raw("  "),
+                        Span::styled(stats, Style::default().fg(Color::DarkGray)),
+                    ])
+                }
+                FlatEntryKind::File { file_index, name } => {
+                    let file = &diff.files[*file_index];
+                    let viewed = if file.viewed { "✓ " } else { "  " };
+                    let stats = format!("+{} -{}", file.added, file.removed);
+                    let name_style = if is_selected {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    Line::from(vec![
+                        Span::styled(viewed, Style::default().fg(Color::Green)),
+                        Span::raw(marker),
+                        Span::raw(indent),
+                        Span::raw("  "), // align with folder names (arrow placeholder)
+                        Span::styled(name.clone(), name_style),
+                        Span::raw("  "),
+                        Span::styled(stats, Style::default().fg(Color::DarkGray)),
+                    ])
+                }
+            }
         })
         .collect();
 
@@ -94,12 +143,14 @@ fn draw_sidebar(frame: &mut Frame, app: &App, diff: &model::Diff, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let file_list = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(" Files "),
-    );
+    let file_list = Paragraph::new(lines)
+        .scroll((app.sidebar_scroll as u16, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(" Files "),
+        );
 
     frame.render_widget(file_list, area);
 }
@@ -112,7 +163,7 @@ fn draw_file_diff(
     ss: &SyntaxSet,
     theme: &Theme,
 ) {
-    let file = &diff.files[app.selected];
+    let file = &diff.files[app.selected_file];
     let is_focused = matches!(app.focus, Focus::Diff);
 
     // Build the set of match line indices for highlighting
@@ -310,7 +361,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
     };
 
     let hints = match app.focus {
-        Focus::Sidebar => "j/k: navigate  l/Enter: diff  /: search  Tab: sidebar  v: viewed  q: quit",
+        Focus::Sidebar => "j/k: navigate  l/Enter: open  Space: toggle folder  /: search  Tab: sidebar  v: viewed  q: quit",
         Focus::Diff => "j/k: scroll  h: sidebar  /: search  n/N: next/prev  Tab: sidebar  q: quit",
     };
 

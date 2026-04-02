@@ -4,6 +4,7 @@ mod git;
 mod github;
 mod model;
 mod provider;
+mod tree;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -67,8 +68,10 @@ fn main() -> Result<()> {
                 ts.themes.keys().cloned().collect::<Vec<_>>().join(", ")))?
     };
 
+    let tree = tree::FileTree::from_files(&diff.files);
+
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut diff, &label, &ss, &theme);
+    let result = run(&mut terminal, &mut diff, &tree, &label, &ss, &theme);
     ratatui::restore();
 
     result
@@ -77,6 +80,7 @@ fn main() -> Result<()> {
 fn run(
     terminal: &mut DefaultTerminal,
     diff: &mut model::Diff,
+    tree: &tree::FileTree,
     branch: &str,
     ss: &SyntaxSet,
     theme: &syntect::highlighting::Theme,
@@ -84,13 +88,24 @@ fn run(
     let mut app = app::App::new();
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, diff, branch, ss, theme))?;
+        let visible = tree.flatten(&app.collapsed);
+
+        // Clamp selection if entries were hidden by collapsing
+        if !visible.is_empty() && app.selected >= visible.len() {
+            app.selected = visible.len() - 1;
+            app.update_selected_file(&visible);
+        }
+
+        let sidebar_height = terminal.size()?.height as usize - 1;
+        app.ensure_sidebar_visible(sidebar_height);
+
+        terminal.draw(|frame| ui::draw(frame, &app, diff, &visible, branch, ss, theme))?;
 
         let viewport_height = terminal.size()?.height as usize;
         let content_height = diff
             .files
-            .get(app.selected)
-            .map(|f| ui::diff_line_count(f))
+            .get(app.selected_file)
+            .map(ui::diff_line_count)
             .unwrap_or(0);
 
         if let Event::Key(key) = event::read()? {
@@ -110,7 +125,7 @@ fn run(
             if app.g_pressed {
                 app.g_pressed = false;
                 if key.code == KeyCode::Char('g') {
-                    app.jump_to_top();
+                    app.jump_to_top(&visible);
                     continue;
                 }
             }
@@ -119,10 +134,10 @@ fn run(
             match key.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Tab => { app.toggle_sidebar(); continue; }
-                KeyCode::Char('v') => { app.toggle_viewed(diff); continue; }
+                KeyCode::Char('v') => { app.toggle_viewed_entry(diff, &visible); continue; }
                 KeyCode::Char('g') => { app.g_pressed = true; continue; }
                 KeyCode::Char('G') => {
-                    app.jump_to_bottom(diff.files.len(), content_height);
+                    app.jump_to_bottom(&visible, content_height);
                     continue;
                 }
                 KeyCode::Char('/') => { app.start_search(); continue; }
@@ -134,9 +149,11 @@ fn run(
             // Focus-specific keys
             match app.focus {
                 app::Focus::Sidebar => match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => app.select_next(diff.files.len()),
-                    KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-                    KeyCode::Enter | KeyCode::Char('l') => app.focus_diff(),
+                    KeyCode::Char('j') | KeyCode::Down => app.select_next_entry(&visible),
+                    KeyCode::Char('k') | KeyCode::Up => app.select_prev_entry(&visible),
+                    KeyCode::Enter => app.activate_entry(&visible),
+                    KeyCode::Char('l') => app.open_file(&visible),
+                    KeyCode::Char(' ') => app.toggle_fold(&visible),
                     KeyCode::Esc => app.clear_search(),
                     _ => {}
                 },
