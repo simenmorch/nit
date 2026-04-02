@@ -316,4 +316,36 @@ impl App {
             }
         }
     }
+
+    pub fn next_hunk(&mut self, diff: &crate::model::Diff) {
+        let Some(file) = diff.files.get(self.selected_file) else {
+            return;
+        };
+        let mut line_index: usize = 0;
+        for hunk in &file.hunks {
+            if line_index > self.scroll {
+                self.scroll = line_index;
+                return;
+            }
+            line_index += 1 + hunk.lines.len();
+        }
+    }
+
+    pub fn prev_hunk(&mut self, diff: &crate::model::Diff) {
+        let Some(file) = diff.files.get(self.selected_file) else {
+            return;
+        };
+        let mut hunk_starts = Vec::new();
+        let mut line_index: usize = 0;
+        for hunk in &file.hunks {
+            hunk_starts.push(line_index);
+            line_index += 1 + hunk.lines.len();
+        }
+        for &start in hunk_starts.iter().rev() {
+            if start < self.scroll {
+                self.scroll = start;
+                return;
+            }
+        }
+    }
 }

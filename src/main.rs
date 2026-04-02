@@ -110,6 +110,14 @@ fn handle_key(
                 app.scroll_up_half_page(viewport_height);
                 return KeyAction::Continue;
             }
+            KeyCode::Char('n') => {
+                app.next_hunk(diff);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('p') => {
+                app.prev_hunk(diff);
+                return KeyAction::Continue;
+            }
             _ => {}
         }
     }
