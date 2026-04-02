@@ -350,23 +350,42 @@ fn highlight_search_in_spans(spans: Vec<Span<'_>>, app: &App, bg: Color) -> Vec<
     for span in spans {
         let text = span.content.to_string();
         let style = span.style;
-        let text_lower = text.to_lowercase();
 
-        let mut last = 0;
-        for (start, _) in text_lower.match_indices(&query_lower) {
-            let end = start + query.len();
-            if start > last {
-                result.push(Span::styled(text[last..start].to_string(), style));
+        // Build a mapping from lowercase byte offsets back to original byte offsets.
+        // This is needed because to_lowercase() can change byte lengths of characters.
+        let mut lower_to_orig: Vec<usize> = Vec::new();
+        let mut text_lower = String::new();
+        for (orig_byte, ch) in text.char_indices() {
+            let lower_ch = ch.to_lowercase();
+            for lc in lower_ch {
+                let lc_len = lc.len_utf8();
+                for _ in 0..lc_len {
+                    lower_to_orig.push(orig_byte);
+                }
+                text_lower.push(lc);
+            }
+        }
+        // Sentinel so we can look up the "end" position (= original string length)
+        lower_to_orig.push(text.len());
+
+        let mut last_orig = 0;
+        for (lower_start, matched) in text_lower.match_indices(&query_lower) {
+            let lower_end = lower_start + matched.len();
+            let orig_start = lower_to_orig[lower_start];
+            let orig_end = lower_to_orig[lower_end];
+
+            if orig_start > last_orig {
+                result.push(Span::styled(text[last_orig..orig_start].to_string(), style));
             }
             result.push(Span::styled(
-                text[start..end].to_string(),
+                text[orig_start..orig_end].to_string(),
                 style.bg(bg).add_modifier(Modifier::BOLD),
             ));
-            last = end;
+            last_orig = orig_end;
         }
-        if last < text.len() {
-            result.push(Span::styled(text[last..].to_string(), style));
-        } else if last == 0 {
+        if last_orig < text.len() {
+            result.push(Span::styled(text[last_orig..].to_string(), style));
+        } else if last_orig == 0 {
             result.push(Span::styled(text, style));
         }
     }
