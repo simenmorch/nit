@@ -40,7 +40,6 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
             .unwrap_or("");
 
         let path = path.strip_suffix(".git").unwrap_or(path);
-        let test = path.strip_suffix(".git").unwrap_or(path);
         let parts: Vec<&str> = path.splitn(2, '/').collect();
         if parts.len() == 2 {
             return Ok((parts[0].to_string(), parts[1].to_string()));
