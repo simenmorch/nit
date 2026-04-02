@@ -127,8 +127,6 @@ where
     deserializer.deserialize_str(HexColorVisitor)
 }
 
-/// Load config from ~/.config/nit/config.toml (or platform equivalent).
-/// Returns default config if the file doesn't exist.
 pub fn load() -> Result<Config> {
     let path = config_path();
 
