@@ -46,7 +46,19 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
         }
     }
 
-    anyhow::bail!("could not parse owner/repo from remote URL: {}", url)
+    // Strip credentials from URL before including in error message
+    let safe_url = if let Some(rest) = url.split_once("://").map(|(scheme, rest)| {
+        if let Some((_, after_at)) = rest.split_once('@') {
+            format!("{}://{}", scheme, after_at)
+        } else {
+            url.to_string()
+        }
+    }) {
+        rest
+    } else {
+        url.to_string()
+    };
+    anyhow::bail!("could not parse owner/repo from remote URL: {}", safe_url)
 }
 
 /// Get the current branch name, or "HEAD" if detached.
