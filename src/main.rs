@@ -187,7 +187,7 @@ fn run(
             app.update_selected_file(&visible);
         }
 
-        let sidebar_height = terminal.size()?.height as usize - 1;
+        let sidebar_height = (terminal.size()?.height as usize).saturating_sub(1);
         app.ensure_sidebar_visible(sidebar_height);
 
         terminal.draw(|frame| ui::draw(frame, &app, diff, &visible, branch, ss, theme, colors))?;
