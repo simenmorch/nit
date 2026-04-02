@@ -37,10 +37,10 @@ impl GitHubProvider {
 
 /// Try GITHUB_TOKEN env var, then fall back to `gh auth token`.
 fn resolve_token() -> Result<String> {
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        if !token.is_empty() {
-            return Ok(token);
-        }
+    if let Ok(token) = std::env::var("GITHUB_TOKEN")
+        && !token.is_empty()
+    {
+        return Ok(token);
     }
 
     let output = Command::new("gh")
@@ -198,24 +198,24 @@ fn parse_patch(patch: &str) -> Vec<model::Hunk> {
                 old_num = 0;
                 new_num = 0;
             }
-        } else if text.starts_with('+') {
+        } else if let Some(stripped) = text.strip_prefix('+') {
             current_lines.push(model::Line {
                 kind: model::LineKind::Added,
-                content: text[1..].to_string(),
+                content: stripped.to_string(),
                 old_num: None,
                 new_num: Some(new_num),
             });
             new_num += 1;
-        } else if text.starts_with('-') {
+        } else if let Some(stripped) = text.strip_prefix('-') {
             current_lines.push(model::Line {
                 kind: model::LineKind::Removed,
-                content: text[1..].to_string(),
+                content: stripped.to_string(),
                 old_num: Some(old_num),
                 new_num: None,
             });
             old_num += 1;
         } else {
-            let content = if text.starts_with(' ') { &text[1..] } else { text };
+            let content = text.strip_prefix(' ').unwrap_or(text);
             current_lines.push(model::Line {
                 kind: model::LineKind::Context,
                 content: content.to_string(),

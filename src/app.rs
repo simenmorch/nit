@@ -32,6 +32,12 @@ pub struct App {
     pub search: Option<SearchState>,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -90,16 +96,16 @@ impl App {
     /// `l` key: if on a file, focus diff. If on a folder, jump the cursor
     /// to the file currently shown in the diff panel and focus it.
     pub fn open_file(&mut self, visible: &[FlatEntry]) {
-        if let Some(entry) = visible.get(self.selected) {
-            if matches!(entry.kind, FlatEntryKind::Folder { .. }) {
-                // Jump cursor to the entry matching selected_file
-                for (i, e) in visible.iter().enumerate() {
-                    if let FlatEntryKind::File { file_index, .. } = &e.kind {
-                        if *file_index == self.selected_file {
-                            self.selected = i;
-                            break;
-                        }
-                    }
+        if let Some(entry) = visible.get(self.selected)
+            && matches!(entry.kind, FlatEntryKind::Folder { .. })
+        {
+            // Jump cursor to the entry matching selected_file
+            for (i, e) in visible.iter().enumerate() {
+                if let FlatEntryKind::File { file_index, .. } = &e.kind
+                    && *file_index == self.selected_file
+                {
+                    self.selected = i;
+                    break;
                 }
             }
         }
@@ -154,8 +160,8 @@ impl App {
         diff.files[self.selected_file].viewed = true;
 
         // Find the next file entry after the current sidebar selection
-        for i in (self.selected + 1)..visible.len() {
-            if let FlatEntryKind::File { file_index, .. } = &visible[i].kind {
+        for (i, entry) in visible.iter().enumerate().skip(self.selected + 1) {
+            if let FlatEntryKind::File { file_index, .. } = &entry.kind {
                 self.selected = i;
                 self.selected_file = *file_index;
                 self.scroll = 0;

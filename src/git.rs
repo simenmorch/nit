@@ -36,7 +36,7 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
         let path = url
             .split("://")
             .nth(1)
-            .and_then(|s| s.splitn(2, '/').nth(1))
+            .and_then(|s| s.split_once('/').map(|x| x.1))
             .unwrap_or("");
 
         let path = path.strip_suffix(".git").unwrap_or(path);

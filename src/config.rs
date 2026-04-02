@@ -156,10 +156,10 @@ fn config_path() -> Option<PathBuf> {
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = directories::BaseDirs::new() {
-            return home.home_dir().join(rest);
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = directories::BaseDirs::new()
+    {
+        return home.home_dir().join(rest);
     }
     PathBuf::from(path)
 }
@@ -198,21 +198,21 @@ pub fn resolve_theme(config: &ThemeConfig) -> Result<Theme> {
     }
 
     // 3. Search themes directory for a matching theme file
-    if let Some(themes_dir) = config_dir().map(|d| d.join("themes")) {
-        if themes_dir.is_dir() {
-            for entry in fs::read_dir(&themes_dir)
-                .with_context(|| format!("failed to read themes dir {}", themes_dir.display()))?
-            {
-                let entry = entry?;
-                let path = entry.path();
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if !THEME_EXTENSIONS.contains(&ext) {
-                    continue;
-                }
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if stem.eq_ignore_ascii_case(&config.syntax) {
-                    return load_theme_file(&path);
-                }
+    if let Some(themes_dir) = config_dir().map(|d| d.join("themes"))
+        && themes_dir.is_dir()
+    {
+        for entry in fs::read_dir(&themes_dir)
+            .with_context(|| format!("failed to read themes dir {}", themes_dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !THEME_EXTENSIONS.contains(&ext) {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem.eq_ignore_ascii_case(&config.syntax) {
+                return load_theme_file(&path);
             }
         }
     }

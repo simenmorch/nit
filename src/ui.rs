@@ -216,12 +216,12 @@ fn draw_file_diff(
                 Style::default().fg(colors.fg_muted),
             )];
 
-            if let Some((ref all, current)) = match_lines {
-                if all.contains(&line_index) {
-                    let is_current = current == Some(line_index);
-                    let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
-                    hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
-                }
+            if let Some((ref all, current)) = match_lines
+                && all.contains(&line_index)
+            {
+                let is_current = current == Some(line_index);
+                let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
+                hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
             }
 
             lines.push(Line::from(hunk_header_spans));
@@ -285,12 +285,12 @@ fn draw_file_diff(
                 }
 
                 // Apply search highlighting on matching lines
-                if let Some((ref all, current)) = match_lines {
-                    if all.contains(&line_index) {
-                        let is_current = current == Some(line_index);
-                        let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
-                        spans = highlight_search_in_spans(spans, app, bg);
-                    }
+                if let Some((ref all, current)) = match_lines
+                    && all.contains(&line_index)
+                {
+                    let is_current = current == Some(line_index);
+                    let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
+                    spans = highlight_search_in_spans(spans, app, bg);
                 }
 
                 lines.push(Line::from(spans));
