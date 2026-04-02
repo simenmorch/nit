@@ -260,3 +260,106 @@ fn parse_hunk_header(header: &str) -> Option<(usize, usize)> {
 
     Some((old_start, new_start))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::LineKind;
+
+    // ── parse_hunk_header ──
+
+    #[test]
+    fn hunk_header_standard() {
+        assert_eq!(parse_hunk_header("@@ -10,5 +20,8 @@"), Some((10, 20)));
+    }
+
+    #[test]
+    fn hunk_header_with_function_context() {
+        assert_eq!(
+            parse_hunk_header("@@ -1,3 +1,4 @@ fn main()"),
+            Some((1, 1))
+        );
+    }
+
+    #[test]
+    fn hunk_header_no_comma() {
+        assert_eq!(parse_hunk_header("@@ -1 +1 @@"), Some((1, 1)));
+    }
+
+    #[test]
+    fn hunk_header_invalid() {
+        assert_eq!(parse_hunk_header("not a header"), None);
+    }
+
+    #[test]
+    fn hunk_header_empty() {
+        assert_eq!(parse_hunk_header(""), None);
+    }
+
+    // ── parse_patch ──
+
+    #[test]
+    fn parse_patch_single_hunk() {
+        let patch = "@@ -1,3 +1,4 @@\n context\n+added\n-removed";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines.len(), 3);
+    }
+
+    #[test]
+    fn parse_patch_multi_hunk() {
+        let patch = "@@ -1,2 +1,2 @@\n line1\n+line2\n@@ -10,2 +10,2 @@\n line3\n-line4";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks.len(), 2);
+    }
+
+    #[test]
+    fn parse_patch_line_kinds() {
+        let patch = "@@ -1,3 +1,3 @@\n context\n+added\n-removed";
+        let hunks = parse_patch(patch);
+        let lines = &hunks[0].lines;
+        assert!(matches!(lines[0].kind, LineKind::Context));
+        assert!(matches!(lines[1].kind, LineKind::Added));
+        assert!(matches!(lines[2].kind, LineKind::Removed));
+    }
+
+    #[test]
+    fn parse_patch_line_numbers() {
+        let patch = "@@ -10,3 +20,3 @@\n context\n+added\n-removed";
+        let hunks = parse_patch(patch);
+        let lines = &hunks[0].lines;
+
+        // Context line: both old and new
+        assert_eq!(lines[0].old_num, Some(10));
+        assert_eq!(lines[0].new_num, Some(20));
+
+        // Added line: only new
+        assert_eq!(lines[1].old_num, None);
+        assert_eq!(lines[1].new_num, Some(21));
+
+        // Removed line: only old
+        assert_eq!(lines[2].old_num, Some(11));
+        assert_eq!(lines[2].new_num, None);
+    }
+
+    #[test]
+    fn parse_patch_content_strips_prefix() {
+        let patch = "@@ -1,2 +1,2 @@\n context line\n+added line";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks[0].lines[0].content, "context line");
+        assert_eq!(hunks[0].lines[1].content, "added line");
+    }
+
+    #[test]
+    fn parse_patch_empty() {
+        let hunks = parse_patch("");
+        assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn parse_patch_preserves_header() {
+        let patch = "@@ -1,3 +1,4 @@ fn main()\n context";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks[0].header, "@@ -1,3 +1,4 @@ fn main()");
+    }
+}

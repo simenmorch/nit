@@ -224,3 +224,103 @@ pub fn resolve_theme(config: &ThemeConfig) -> Result<Theme> {
         ts.themes.keys().cloned().collect::<Vec<_>>().join(", ")
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_hex_color ──
+
+    #[test]
+    fn parse_valid_hex_with_hash() {
+        assert_eq!(parse_hex_color("#ff0000").unwrap(), Color::Rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn parse_valid_hex_without_hash() {
+        assert_eq!(parse_hex_color("00ff00").unwrap(), Color::Rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn parse_hex_mixed_case() {
+        assert_eq!(parse_hex_color("#aaBBcc").unwrap(), Color::Rgb(170, 187, 204));
+    }
+
+    #[test]
+    fn parse_hex_invalid_length() {
+        assert!(parse_hex_color("#fff").is_err());
+    }
+
+    #[test]
+    fn parse_hex_invalid_chars() {
+        assert!(parse_hex_color("#gggggg").is_err());
+    }
+
+    // ── Config deserialization ──
+
+    #[test]
+    fn empty_toml_gives_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.theme.syntax, "base16-ocean.dark");
+        assert!(config.theme.syntax_file.is_none());
+    }
+
+    #[test]
+    fn full_config_parse() {
+        let toml = r##"
+[theme]
+syntax = "Monokai"
+
+[colors]
+bg = "#1e1e1e"
+border_focused = "#88C0D0"
+border_unfocused = "#4C566A"
+fg = "#D8DEE9"
+fg_muted = "#4C566A"
+fg_selected = "#88C0D0"
+fg_added = "#A3BE8C"
+fg_removed = "#BF616A"
+fg_accent = "#EBCB8B"
+fg_info = "#B48EAD"
+bg_added = "#1e3c1e"
+bg_removed = "#3c1e1e"
+bg_search_match = "#786420"
+bg_search_current = "#b48c14"
+"##;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.theme.syntax, "Monokai");
+        assert_eq!(config.colors.bg, Some(Color::Rgb(30, 30, 30)));
+        assert_eq!(config.colors.fg, Color::Rgb(216, 222, 233));
+    }
+
+    #[test]
+    fn resolve_builtin_theme() {
+        let theme_config = ThemeConfig::default();
+        let theme = resolve_theme(&theme_config).unwrap();
+        assert!(!theme.scopes.is_empty());
+    }
+
+    #[test]
+    fn resolve_unknown_theme_errors() {
+        let theme_config = ThemeConfig {
+            syntax: "nonexistent-theme-xyz".to_string(),
+            syntax_file: None,
+        };
+        assert!(resolve_theme(&theme_config).is_err());
+    }
+
+    // ── expand_tilde ──
+
+    #[test]
+    fn expand_tilde_with_prefix() {
+        let path = expand_tilde("~/some/path");
+        // Should not start with ~ anymore
+        assert!(!path.to_string_lossy().starts_with('~'));
+    }
+
+    #[test]
+    fn expand_tilde_no_prefix() {
+        let path = expand_tilde("/absolute/path");
+        assert_eq!(path.to_string_lossy(), "/absolute/path");
+    }
+}

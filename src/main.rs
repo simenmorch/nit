@@ -1,18 +1,10 @@
-mod app;
-mod config;
-mod git;
-mod github;
-mod model;
-mod provider;
-mod tree;
-mod ui;
-
 use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 use syntect::parsing::SyntaxSet;
 
+use nit::{app, config, git, github, model, provider, tree, ui};
 use provider::ReviewProvider;
 
 #[derive(Parser)]

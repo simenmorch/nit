@@ -450,3 +450,188 @@ pub fn diff_line_count(file: &model::DiffFile) -> usize {
         .map(|h| 1 + h.lines.len())
         .sum()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::config::ColorsConfig;
+    use crate::model::LineKind;
+    use crate::test_helpers::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use syntect::highlighting::ThemeSet;
+    use syntect::parsing::SyntaxSet;
+
+    fn test_terminal(w: u16, h: u16) -> Terminal<TestBackend> {
+        Terminal::new(TestBackend::new(w, h)).unwrap()
+    }
+
+    fn default_theme() -> syntect::highlighting::Theme {
+        let ts = ThemeSet::load_defaults();
+        ts.themes["base16-ocean.dark"].clone()
+    }
+
+    fn render(
+        terminal: &mut Terminal<TestBackend>,
+        app: &App,
+        diff: &model::Diff,
+        visible: &[FlatEntry],
+    ) {
+        let ss = SyntaxSet::load_defaults_newlines();
+        let theme = default_theme();
+        let colors = ColorsConfig::default();
+        terminal
+            .draw(|frame| draw(frame, app, diff, visible, "main", &ss, &theme, &colors))
+            .unwrap();
+    }
+
+    #[test]
+    fn render_empty_diff() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_diff(vec![]);
+        let visible = flat_entries_for(&diff);
+        let app = App::new();
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_single_file() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_diff(vec![make_file(
+            "src/main.rs",
+            vec![make_hunk(
+                "@@ -1,3 +1,4 @@",
+                vec![
+                    make_line(LineKind::Context, "fn main() {", Some(1), Some(1)),
+                    make_line(LineKind::Added, "    println!(\"hello\");", None, Some(2)),
+                    make_line(LineKind::Context, "}", Some(2), Some(3)),
+                ],
+            )],
+        )]);
+        let visible = flat_entries_for(&diff);
+        let app = App::new();
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_sidebar_focused() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_simple_diff(3);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.focus = Focus::Sidebar;
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_diff_focused() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_simple_diff(3);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.focus = Focus::Diff;
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_sidebar_hidden() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_simple_diff(2);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.show_sidebar = false;
+        app.focus = Focus::Diff;
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_with_search_matches() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_diff(vec![make_file(
+            "a.rs",
+            vec![make_hunk(
+                "@@ -1 +1 @@",
+                vec![make_line(LineKind::Context, "search target", Some(1), Some(1))],
+            )],
+        )]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.search_input = "search".to_string();
+        app.submit_search(&diff);
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_search_input_mode() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_simple_diff(1);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.searching = true;
+        app.search_input = "query".to_string();
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_scrolled_near_bottom() {
+        let mut terminal = test_terminal(120, 40);
+        let lines: Vec<_> = (0..50)
+            .map(|i| make_line(LineKind::Context, &format!("line {}", i), Some(i), Some(i)))
+            .collect();
+        let diff = make_diff(vec![make_file("big.rs", vec![make_hunk("@@ -1 +1 @@", lines)])]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.scroll = 30;
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_small_terminal() {
+        let mut terminal = test_terminal(20, 5);
+        let diff = make_simple_diff(2);
+        let visible = flat_entries_for(&diff);
+        let app = App::new();
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_binary_file() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_diff(vec![make_file("image.png", vec![])]);
+        let visible = flat_entries_for(&diff);
+        let app = App::new();
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn render_long_filename() {
+        let mut terminal = test_terminal(120, 40);
+        let long_path = format!("src/very/deeply/nested/directory/structure/{}", "a".repeat(60));
+        let diff = make_diff(vec![make_file(
+            &long_path,
+            vec![make_hunk("@@ -1 +1 @@", vec![make_line(LineKind::Context, "x", Some(1), Some(1))])],
+        )]);
+        let visible = flat_entries_for(&diff);
+        let app = App::new();
+        render(&mut terminal, &app, &diff, &visible);
+    }
+
+    #[test]
+    fn diff_line_count_correct() {
+        let file = make_file(
+            "a.rs",
+            vec![
+                make_hunk("@@", vec![
+                    make_line(LineKind::Context, "a", Some(1), Some(1)),
+                    make_line(LineKind::Context, "b", Some(2), Some(2)),
+                ]),
+                make_hunk("@@", vec![
+                    make_line(LineKind::Added, "c", None, Some(3)),
+                ]),
+            ],
+        );
+        // 2 hunks: (1 header + 2 lines) + (1 header + 1 line) = 5
+        assert_eq!(diff_line_count(&file), 5);
+    }
+}

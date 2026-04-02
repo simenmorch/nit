@@ -240,3 +240,160 @@ fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
 
     Ok(model::Diff { files })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    // ── parse_remote_url ──
+
+    #[test]
+    fn parse_ssh_remote() {
+        let (owner, repo) = parse_remote_url("git@github.com:owner/repo.git").unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn parse_ssh_remote_no_dotgit() {
+        let (owner, repo) = parse_remote_url("git@github.com:owner/repo").unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn parse_https_remote() {
+        let (owner, repo) = parse_remote_url("https://github.com/owner/repo.git").unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn parse_https_remote_no_dotgit() {
+        let (owner, repo) = parse_remote_url("https://github.com/owner/repo").unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn parse_invalid_remote() {
+        assert!(parse_remote_url("not-a-url").is_err());
+    }
+
+    // ── Temp repo helpers ──
+
+    fn init_repo(dir: &Path) -> Repository {
+        let repo = Repository::init(dir).unwrap();
+        // Configure a dummy user for commits
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        repo
+    }
+
+    fn commit_file(repo: &Repository, path: &str, content: &str, message: &str) -> git2::Oid {
+        let dir = repo.workdir().unwrap();
+        let file_path = dir.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&file_path, content).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(path)).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        let sig = repo.signature().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .unwrap()
+    }
+
+    // ── Diff with temp repos ──
+
+    #[test]
+    fn uncommitted_diff_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        // Create initial commit so HEAD exists
+        commit_file(&repo, "init.txt", "init", "initial commit");
+        // Stage a new file without committing
+        fs::write(dir.path().join("new.txt"), "hello").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("new.txt")).unwrap();
+        index.write().unwrap();
+
+        let diff = get_uncommitted_diff(&repo).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        assert_eq!(diff.files[0].path, "new.txt");
+        assert!(matches!(diff.files[0].status, model::FileStatus::Added));
+    }
+
+    #[test]
+    fn uncommitted_diff_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "file.txt", "original", "initial");
+        fs::write(dir.path().join("file.txt"), "modified").unwrap();
+
+        let diff = get_uncommitted_diff(&repo).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        assert!(matches!(diff.files[0].status, model::FileStatus::Modified));
+    }
+
+    #[test]
+    fn commit_diff_single() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "first", "first commit");
+        let oid = commit_file(&repo, "a.txt", "second", "second commit");
+
+        let diff = get_commit_diff(&repo, &oid.to_string()).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        assert_eq!(diff.files[0].path, "a.txt");
+        assert!(diff.files[0].added > 0 || diff.files[0].removed > 0);
+    }
+
+    #[test]
+    fn range_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        let from = commit_file(&repo, "a.txt", "v1", "commit 1");
+        commit_file(&repo, "a.txt", "v2", "commit 2");
+        let to = commit_file(&repo, "b.txt", "new", "commit 3");
+
+        let diff = get_range_diff(&repo, &from.to_string(), &to.to_string()).unwrap();
+        // Should show changes between commit 1 and commit 3
+        assert!(!diff.files.is_empty());
+    }
+
+    #[test]
+    fn root_commit_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        let oid = commit_file(&repo, "first.txt", "content", "root commit");
+
+        let diff = get_commit_diff(&repo, &oid.to_string()).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        assert!(matches!(diff.files[0].status, model::FileStatus::Added));
+    }
+
+    #[test]
+    fn empty_repo_uncommitted_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        // No commits yet, but stage a file
+        fs::write(dir.path().join("new.txt"), "hello").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("new.txt")).unwrap();
+        index.write().unwrap();
+
+        let diff = get_uncommitted_diff(&repo).unwrap();
+        assert_eq!(diff.files.len(), 1);
+    }
+}
