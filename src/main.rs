@@ -9,7 +9,7 @@ mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -77,6 +77,96 @@ fn main() -> Result<()> {
     result
 }
 
+enum KeyAction {
+    Continue,
+    Quit,
+}
+
+fn handle_key(
+    key: KeyEvent,
+    app: &mut app::App,
+    diff: &mut model::Diff,
+    visible: &[tree::FlatEntry],
+    content_height: usize,
+    viewport_height: usize,
+) -> KeyAction {
+    // Search input mode — capture keystrokes for the query
+    if app.searching {
+        match key.code {
+            KeyCode::Enter => app.submit_search(diff),
+            KeyCode::Esc => app.cancel_search(),
+            KeyCode::Backspace => { app.search_input.pop(); }
+            KeyCode::Char(c) => app.search_input.push(c),
+            _ => {}
+        }
+        return KeyAction::Continue;
+    }
+
+    // Handle gg (two-key combo)
+    if app.g_pressed {
+        app.g_pressed = false;
+        if key.code == KeyCode::Char('g') {
+            app.jump_to_top(visible);
+            return KeyAction::Continue;
+        }
+    }
+
+    // Ctrl-modified keys (check before plain char matches)
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('d') => {
+                app.scroll_down_half_page(content_height, viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('u') => {
+                app.scroll_up_half_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            _ => {}
+        }
+    }
+
+    // Global keys (work in any focus)
+    match key.code {
+        KeyCode::Char('q') => return KeyAction::Quit,
+        KeyCode::Tab => { app.toggle_sidebar(); return KeyAction::Continue; }
+        KeyCode::Char('v') => { app.toggle_viewed_entry(diff, visible); return KeyAction::Continue; }
+        KeyCode::Char('g') => { app.g_pressed = true; return KeyAction::Continue; }
+        KeyCode::Char('G') => {
+            app.jump_to_bottom(visible, content_height);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('/') => { app.start_search(); return KeyAction::Continue; }
+        KeyCode::Char('n') => { app.next_match(viewport_height); return KeyAction::Continue; }
+        KeyCode::Char('N') => { app.prev_match(viewport_height); return KeyAction::Continue; }
+        _ => {}
+    }
+
+    // Focus-specific keys
+    match app.focus {
+        app::Focus::Sidebar => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.select_next_entry(visible),
+            KeyCode::Char('k') | KeyCode::Up => app.select_prev_entry(visible),
+            KeyCode::Enter => app.activate_entry(visible),
+            KeyCode::Char('l') => app.open_file(visible),
+            KeyCode::Char(' ') => app.toggle_fold(visible),
+            KeyCode::Esc => app.clear_search(),
+            _ => {}
+        },
+        app::Focus::Diff => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.scroll_down(content_height, viewport_height);
+            }
+            KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
+            KeyCode::Char('h') => app.focus_sidebar(),
+            KeyCode::Esc => app.clear_search(),
+            _ => {}
+        },
+    }
+
+    KeyAction::Continue
+}
+
 fn run(
     terminal: &mut DefaultTerminal,
     diff: &mut model::Diff,
@@ -102,76 +192,30 @@ fn run(
         terminal.draw(|frame| ui::draw(frame, &app, diff, &visible, branch, ss, theme))?;
 
         let viewport_height = terminal.size()?.height as usize;
-        let content_height = diff
-            .files
-            .get(app.selected_file)
-            .map(ui::diff_line_count)
-            .unwrap_or(0);
 
-        if let Event::Key(key) = event::read()? {
-            // Search input mode — capture keystrokes for the query
-            if app.searching {
-                match key.code {
-                    KeyCode::Enter => app.submit_search(diff),
-                    KeyCode::Esc => app.cancel_search(),
-                    KeyCode::Backspace => { app.search_input.pop(); }
-                    KeyCode::Char(c) => app.search_input.push(c),
-                    _ => {}
-                }
-                continue;
+        // Process events — drain pending queue before redrawing
+        loop {
+            let content_height = diff
+                .files
+                .get(app.selected_file)
+                .map(ui::diff_line_count)
+                .unwrap_or(0);
+
+            if let Event::Key(key) = event::read()?
+                && matches!(
+                    handle_key(key, &mut app, diff, &visible, content_height, viewport_height),
+                    KeyAction::Quit
+                )
+            {
+                return Ok(());
             }
 
-            // Handle gg (two-key combo)
-            if app.g_pressed {
-                app.g_pressed = false;
-                if key.code == KeyCode::Char('g') {
-                    app.jump_to_top(&visible);
-                    continue;
-                }
-            }
-
-            // Global keys (work in any focus)
-            match key.code {
-                KeyCode::Char('q') => break,
-                KeyCode::Tab => { app.toggle_sidebar(); continue; }
-                KeyCode::Char('v') => { app.toggle_viewed_entry(diff, &visible); continue; }
-                KeyCode::Char('g') => { app.g_pressed = true; continue; }
-                KeyCode::Char('G') => {
-                    app.jump_to_bottom(&visible, content_height);
-                    continue;
-                }
-                KeyCode::Char('/') => { app.start_search(); continue; }
-                KeyCode::Char('n') => { app.next_match(viewport_height); continue; }
-                KeyCode::Char('N') => { app.prev_match(viewport_height); continue; }
-                _ => {}
-            }
-
-            // Focus-specific keys
-            match app.focus {
-                app::Focus::Sidebar => match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => app.select_next_entry(&visible),
-                    KeyCode::Char('k') | KeyCode::Up => app.select_prev_entry(&visible),
-                    KeyCode::Enter => app.activate_entry(&visible),
-                    KeyCode::Char('l') => app.open_file(&visible),
-                    KeyCode::Char(' ') => app.toggle_fold(&visible),
-                    KeyCode::Esc => app.clear_search(),
-                    _ => {}
-                },
-                app::Focus::Diff => match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        app.scroll_down(content_height, viewport_height);
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
-                    KeyCode::Char('h') => app.focus_sidebar(),
-                    KeyCode::Esc => app.clear_search(),
-                    _ => {}
-                },
+            // If no more events are queued, break to redraw
+            if !event::poll(std::time::Duration::ZERO)? {
+                break;
             }
         }
-
     }
-
-    Ok(())
 }
 
 /// Parse a PR reference into (owner, repo, pr_number).

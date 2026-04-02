@@ -165,6 +165,7 @@ fn draw_file_diff(
 ) {
     let file = &diff.files[app.selected_file];
     let is_focused = matches!(app.focus, Focus::Diff);
+    let inner_height = area.height.saturating_sub(2) as usize; // subtract borders
 
     // Build the set of match line indices for highlighting
     let match_lines = app.search.as_ref().map(|s| {
@@ -179,87 +180,116 @@ fn draw_file_diff(
         .and_then(|ext| ss.find_syntax_by_extension(ext))
         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
-    let mut lines: Vec<Line> = Vec::new();
+    let vis_start = app.scroll;
+    let vis_end = vis_start + inner_height;
+
+    let mut lines: Vec<Line> = Vec::with_capacity(inner_height);
     let mut line_index: usize = 0;
 
     for hunk in &file.hunks {
-        let mut hunk_header_spans = vec![Span::styled(
-            hunk.header.trim_end().to_string(),
-            Style::default().fg(Color::DarkGray),
-        )];
+        let hunk_size = 1 + hunk.lines.len();
 
-        if let Some((ref all, current)) = match_lines {
-            if all.contains(&line_index) {
-                let is_current = current == Some(line_index);
-                let bg = if is_current { SEARCH_CURRENT_BG } else { SEARCH_HIGHLIGHT_BG };
-                hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
-            }
+        // Skip hunks entirely above the viewport
+        if line_index + hunk_size <= vis_start {
+            line_index += hunk_size;
+            continue;
         }
 
-        lines.push(Line::from(hunk_header_spans));
+        // Stop once past the viewport
+        if line_index >= vis_end {
+            break;
+        }
+
+        // Hunk header
+        if line_index >= vis_start {
+            let mut hunk_header_spans = vec![Span::styled(
+                hunk.header.trim_end().to_string(),
+                Style::default().fg(Color::DarkGray),
+            )];
+
+            if let Some((ref all, current)) = match_lines {
+                if all.contains(&line_index) {
+                    let is_current = current == Some(line_index);
+                    let bg = if is_current { SEARCH_CURRENT_BG } else { SEARCH_HIGHLIGHT_BG };
+                    hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
+                }
+            }
+
+            lines.push(Line::from(hunk_header_spans));
+        }
         line_index += 1;
 
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         for line in &hunk.lines {
+            if line_index >= vis_end {
+                break;
+            }
+
             let content = line.content.trim_end();
 
-            let diff_bg = match line.kind {
-                model::LineKind::Added => Some(Color::Rgb(30, 60, 30)),
-                model::LineKind::Removed => Some(Color::Rgb(60, 30, 30)),
-                model::LineKind::Context => None,
-            };
+            if line_index >= vis_start {
+                let diff_bg = match line.kind {
+                    model::LineKind::Added => Some(Color::Rgb(30, 60, 30)),
+                    model::LineKind::Removed => Some(Color::Rgb(60, 30, 30)),
+                    model::LineKind::Context => None,
+                };
 
-            let prefix = match line.kind {
-                model::LineKind::Added => "+",
-                model::LineKind::Removed => "-",
-                model::LineKind::Context => " ",
-            };
+                let prefix = match line.kind {
+                    model::LineKind::Added => "+",
+                    model::LineKind::Removed => "-",
+                    model::LineKind::Context => " ",
+                };
 
-            let prefix_style = match line.kind {
-                model::LineKind::Added => Style::default().fg(Color::Green),
-                model::LineKind::Removed => Style::default().fg(Color::Red),
-                model::LineKind::Context => Style::default().fg(Color::White),
-            };
-            let prefix_style = if let Some(bg) = diff_bg {
-                prefix_style.bg(bg)
-            } else {
-                prefix_style
-            };
+                let prefix_style = match line.kind {
+                    model::LineKind::Added => Style::default().fg(Color::Green),
+                    model::LineKind::Removed => Style::default().fg(Color::Red),
+                    model::LineKind::Context => Style::default().fg(Color::White),
+                };
+                let prefix_style = if let Some(bg) = diff_bg {
+                    prefix_style.bg(bg)
+                } else {
+                    prefix_style
+                };
 
-            let mut spans = vec![Span::styled(prefix, prefix_style)];
+                let mut spans = vec![Span::styled(prefix, prefix_style)];
 
-            if let Ok(highlighted) = highlighter.highlight_line(content, ss) {
-                for (style, text) in highlighted {
-                    let fg = Color::Rgb(
-                        style.foreground.r,
-                        style.foreground.g,
-                        style.foreground.b,
-                    );
-                    let mut s = Style::default().fg(fg);
+                if let Ok(highlighted) = highlighter.highlight_line(content, ss) {
+                    for (style, text) in highlighted {
+                        let fg = Color::Rgb(
+                            style.foreground.r,
+                            style.foreground.g,
+                            style.foreground.b,
+                        );
+                        let mut s = Style::default().fg(fg);
+                        if let Some(bg) = diff_bg {
+                            s = s.bg(bg);
+                        }
+                        spans.push(Span::styled(text.to_string(), s));
+                    }
+                } else {
+                    let mut s = Style::default();
                     if let Some(bg) = diff_bg {
                         s = s.bg(bg);
                     }
-                    spans.push(Span::styled(text.to_string(), s));
+                    spans.push(Span::styled(content.to_string(), s));
                 }
+
+                // Apply search highlighting on matching lines
+                if let Some((ref all, current)) = match_lines {
+                    if all.contains(&line_index) {
+                        let is_current = current == Some(line_index);
+                        let bg = if is_current { SEARCH_CURRENT_BG } else { SEARCH_HIGHLIGHT_BG };
+                        spans = highlight_search_in_spans(spans, app, bg);
+                    }
+                }
+
+                lines.push(Line::from(spans));
             } else {
-                let mut s = Style::default();
-                if let Some(bg) = diff_bg {
-                    s = s.bg(bg);
-                }
-                spans.push(Span::styled(content.to_string(), s));
+                // Pre-viewport: feed highlighter to maintain state within hunk
+                let _ = highlighter.highlight_line(content, ss);
             }
 
-            // Apply search highlighting on matching lines
-            if let Some((ref all, current)) = match_lines {
-                if all.contains(&line_index) {
-                    let is_current = current == Some(line_index);
-                    let bg = if is_current { SEARCH_CURRENT_BG } else { SEARCH_HIGHLIGHT_BG };
-                    spans = highlight_search_in_spans(spans, app, bg);
-                }
-            }
-
-            lines.push(Line::from(spans));
             line_index += 1;
         }
     }
@@ -280,8 +310,8 @@ fn draw_file_diff(
         Style::default().fg(Color::DarkGray)
     };
 
+    // No .scroll() needed — we only built visible lines
     let diff_view = Paragraph::new(lines)
-        .scroll((app.scroll as u16, 0))
         .block(
             Block::default()
                 .borders(Borders::ALL)

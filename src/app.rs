@@ -159,6 +159,17 @@ impl App {
         }
     }
 
+    pub fn scroll_down_half_page(&mut self, content_height: usize, viewport_height: usize) {
+        let half = viewport_height / 2;
+        let max_scroll = content_height.saturating_sub(viewport_height);
+        self.scroll = (self.scroll + half).min(max_scroll);
+    }
+
+    pub fn scroll_up_half_page(&mut self, viewport_height: usize) {
+        let half = viewport_height / 2;
+        self.scroll = self.scroll.saturating_sub(half);
+    }
+
     pub fn focus_diff(&mut self) {
         self.focus = Focus::Diff;
     }
