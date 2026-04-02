@@ -170,7 +170,9 @@ fn draw_file_diff(
     theme: &Theme,
     colors: &ColorsConfig,
 ) {
-    let file = &diff.files[app.selected_file];
+    let Some(file) = diff.files.get(app.selected_file) else {
+        return;
+    };
     let is_focused = matches!(app.focus, Focus::Diff);
     let inner_height = area.height.saturating_sub(2) as usize; // subtract borders
 
