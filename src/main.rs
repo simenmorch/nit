@@ -127,6 +127,7 @@ fn handle_key(
         KeyCode::Char('q') => return KeyAction::Quit,
         KeyCode::Tab => { app.toggle_sidebar(); return KeyAction::Continue; }
         KeyCode::Char('v') => { app.toggle_viewed_entry(diff, visible); return KeyAction::Continue; }
+        KeyCode::Char('V') => { app.mark_viewed_and_next(diff, visible); return KeyAction::Continue; }
         KeyCode::Char('g') => { app.g_pressed = true; return KeyAction::Continue; }
         KeyCode::Char('G') => {
             app.jump_to_bottom(visible, content_height, viewport_height);

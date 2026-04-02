@@ -146,6 +146,24 @@ impl App {
         }
     }
 
+    pub fn mark_viewed_and_next(
+        &mut self,
+        diff: &mut crate::model::Diff,
+        visible: &[FlatEntry],
+    ) {
+        diff.files[self.selected_file].viewed = true;
+
+        // Find the next file entry after the current sidebar selection
+        for i in (self.selected + 1)..visible.len() {
+            if let FlatEntryKind::File { file_index, .. } = &visible[i].kind {
+                self.selected = i;
+                self.selected_file = *file_index;
+                self.scroll = 0;
+                return;
+            }
+        }
+    }
+
     pub fn scroll_down(&mut self, content_height: usize, viewport_height: usize) {
         let max_scroll = content_height.saturating_sub(viewport_height);
         if self.scroll < max_scroll {
