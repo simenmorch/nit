@@ -1,12 +1,12 @@
 use std::fmt;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use directories::ProjectDirs;
+use anyhow::{Context, Result, bail};
 use ratatui::style::Color;
 use serde::Deserialize;
 use serde::de::{self, Visitor};
+use syntect::highlighting::{Theme, ThemeSet};
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
@@ -20,7 +20,7 @@ pub struct Config {
 pub struct ThemeConfig {
     /// Name of a bundled syntect theme, e.g. "base16-ocean.dark"
     pub syntax: String,
-    /// Path to a custom .tmTheme file (overrides `syntax` if set)
+    /// Path to a .tmTheme or .sublime-color-scheme file (overrides `syntax` if set)
     pub syntax_file: Option<String>,
 }
 
@@ -142,6 +142,85 @@ pub fn load() -> Result<Config> {
     }
 }
 
+fn config_dir() -> Option<PathBuf> {
+    // Prefer XDG_CONFIG_HOME, fall back to ~/.config (even on macOS where
+    // `directories` would use ~/Library/Application Support).
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(xdg).join("nit"));
+    }
+    directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".config").join("nit"))
+}
+
 fn config_path() -> Option<PathBuf> {
-    ProjectDirs::from("", "", "nit").map(|dirs| dirs.config_dir().join("nit.toml"))
+    config_dir().map(|dir| dir.join("nit.toml"))
+}
+
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = directories::BaseDirs::new() {
+            return home.home_dir().join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn load_theme_file(path: &Path) -> Result<Theme> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("tmTheme") => ThemeSet::get_theme(path)
+            .with_context(|| format!("failed to load theme from {}", path.display())),
+        Some("sublime-color-scheme") => {
+            let cs = sublime_color_scheme::parse_color_scheme_file(path)
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .with_context(|| format!("failed to parse color scheme {}", path.display()))?;
+            let theme: Theme = cs
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("{:?}", e))
+                .with_context(|| format!("failed to convert color scheme {}", path.display()))?;
+            Ok(theme)
+        }
+        _ => bail!("unsupported theme format: {}", path.display()),
+    }
+}
+
+const THEME_EXTENSIONS: &[&str] = &["tmTheme", "sublime-color-scheme"];
+
+pub fn resolve_theme(config: &ThemeConfig) -> Result<Theme> {
+    // 1. Explicit file path takes priority
+    if let Some(ref path) = config.syntax_file {
+        let expanded = expand_tilde(path);
+        return load_theme_file(&expanded);
+    }
+
+    // 2. Check bundled syntect themes
+    let ts = ThemeSet::load_defaults();
+    if let Some(theme) = ts.themes.get(&config.syntax) {
+        return Ok(theme.clone());
+    }
+
+    // 3. Search themes directory for a matching theme file
+    if let Some(themes_dir) = config_dir().map(|d| d.join("themes")) {
+        if themes_dir.is_dir() {
+            for entry in fs::read_dir(&themes_dir)
+                .with_context(|| format!("failed to read themes dir {}", themes_dir.display()))?
+            {
+                let entry = entry?;
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if !THEME_EXTENSIONS.contains(&ext) {
+                    continue;
+                }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if stem.eq_ignore_ascii_case(&config.syntax) {
+                    return load_theme_file(&path);
+                }
+            }
+        }
+    }
+
+    bail!(
+        "unknown theme '{}'. Place a .tmTheme or .sublime-color-scheme file in ~/.config/nit/themes/ \
+         or use a built-in theme: {}",
+        config.syntax,
+        ts.themes.keys().cloned().collect::<Vec<_>>().join(", ")
+    );
 }

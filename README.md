@@ -57,10 +57,27 @@ Config file: `~/.config/nit/nit.toml`
 # Bundled themes: base16-ocean.dark, base16-eighties.dark,
 #                 InspiredGitHub, Solarized (dark), Solarized (light)
 syntax = "base16-ocean.dark"
-
-# Or load a custom .tmTheme file:
-# syntax_file = "/path/to/Nord.tmTheme"
 ```
+
+#### Custom syntax themes
+
+nit supports `.tmTheme` (TextMate) and `.sublime-color-scheme` files. There are two ways to use them:
+
+**Drop-in directory** — place theme files in `~/.config/nit/themes/` and reference by name:
+
+```toml
+[theme]
+syntax = "Nord"  # matches ~/.config/nit/themes/Nord.sublime-color-scheme
+```
+
+**Explicit path** — point directly at a file anywhere on disk. This is useful if you keep a shared themes directory across tools:
+
+```toml
+[theme]
+syntax_file = "~/.config/themes/Nord.sublime-color-scheme"
+```
+
+`syntax_file` takes priority over `syntax` when both are set.
 
 ### Colors
 

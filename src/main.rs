@@ -7,11 +7,10 @@ mod provider;
 mod tree;
 mod ui;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
-use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 use provider::ReviewProvider;
@@ -55,18 +54,7 @@ fn main() -> Result<()> {
     let cfg = config::load()?;
 
     let ss = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
-
-    let theme = if let Some(ref path) = cfg.theme.syntax_file {
-        ThemeSet::get_theme(path)
-            .with_context(|| format!("failed to load theme from {}", path))?
-    } else {
-        ts.themes
-            .get(&cfg.theme.syntax)
-            .cloned()
-            .with_context(|| format!("unknown theme '{}'. Available: {}", cfg.theme.syntax,
-                ts.themes.keys().cloned().collect::<Vec<_>>().join(", ")))?
-    };
+    let theme = config::resolve_theme(&cfg.theme)?;
 
     let tree = tree::FileTree::from_files(&diff.files);
 
