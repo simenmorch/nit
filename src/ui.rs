@@ -34,7 +34,7 @@ pub fn draw(
     }
 
     if diff.files.is_empty() {
-        let message = Paragraph::new("No uncommitted changes.")
+        let message = Paragraph::new(format!("No changes found in {branch}."))
             .style(Style::default().fg(colors.fg_muted))
             .block(Block::default().borders(Borders::ALL).title(" nit "));
         frame.render_widget(message, area);
@@ -419,8 +419,8 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
     };
 
     let hints = match app.focus {
-        Focus::Sidebar => "j/k: navigate  l/Enter: open  Space: toggle folder  /: search  Tab: sidebar  v: viewed  q: quit",
-        Focus::Diff => "j/k: scroll  h: sidebar  /: search  n/N: next/prev  Tab: sidebar  q: quit",
+        Focus::Sidebar => "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  Tab: diff  q: quit",
+        Focus::Diff => "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  h: sidebar  q: quit",
     };
 
     let status = Line::from(vec![

@@ -66,12 +66,15 @@ impl ReviewProvider for GitHubProvider {
         let pr_number: u64 = pr_id.parse().context("PR id must be a number")?;
 
         let files: Vec<DiffEntry> = self.rt.block_on(async {
-            self.client
+            let first_page = self.client
                 .pulls(&self.owner, &self.repo)
                 .list_files(pr_number)
                 .await
-                .context("failed to fetch PR files")
-                .map(|page| page.items)
+                .context("failed to fetch PR files")?;
+            self.client
+                .all_pages(first_page)
+                .await
+                .context("failed to paginate PR files")
         })?;
 
         let mut diff_files: Vec<model::DiffFile> = Vec::new();
@@ -111,14 +114,17 @@ impl ReviewProvider for GitHubProvider {
         let pr_number: u64 = pr_id.parse().context("PR id must be a number")?;
 
         let comments: Vec<OctoComment> = self.rt.block_on(async {
-            self.client
+            let first_page = self.client
                 .pulls(&self.owner, &self.repo)
                 .list_comments(Some(pr_number))
                 .per_page(100)
                 .send()
                 .await
-                .context("failed to fetch PR comments")
-                .map(|page| page.items)
+                .context("failed to fetch PR comments")?;
+            self.client
+                .all_pages(first_page)
+                .await
+                .context("failed to paginate PR comments")
         })?;
 
         let result = comments
@@ -188,6 +194,9 @@ fn parse_patch(patch: &str) -> Vec<model::Hunk> {
             if let Some((old_start, new_start)) = parse_hunk_header(text) {
                 old_num = old_start;
                 new_num = new_start;
+            } else {
+                old_num = 0;
+                new_num = 0;
             }
         } else if text.starts_with('+') {
             current_lines.push(model::Line {
