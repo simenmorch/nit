@@ -195,6 +195,7 @@ fn run(
         let viewport_height = terminal.size()?.height as usize;
 
         // Process events — drain pending queue before redrawing
+        let mut visible = visible;
         loop {
             let content_height = diff
                 .files
@@ -209,6 +210,13 @@ fn run(
                 )
             {
                 return Ok(());
+            }
+
+            // Recompute visible tree in case a fold was toggled
+            visible = tree.flatten(&app.collapsed);
+            if !visible.is_empty() && app.selected >= visible.len() {
+                app.selected = visible.len() - 1;
+                app.update_selected_file(&visible);
             }
 
             // If no more events are queued, break to redraw
