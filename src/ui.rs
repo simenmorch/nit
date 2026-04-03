@@ -9,9 +9,10 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
 
-use crate::app::{App, Focus};
+use crate::app::{App, DiffViewMode, Focus};
 use crate::config::ColorsConfig;
 use crate::model;
+use crate::split::{self, SplitRow, InlineSpan};
 use crate::tree::{FlatEntry, FlatEntryKind};
 
 const SIDEBAR_WIDTH: u16 = 40;
@@ -170,6 +171,11 @@ fn draw_file_diff(
     theme: &Theme,
     colors: &ColorsConfig,
 ) {
+    if app.view_mode == DiffViewMode::SideBySide {
+        draw_file_diff_split(frame, app, diff, area, ss, theme, colors);
+        return;
+    }
+
     let Some(file) = diff.files.get(app.selected_file) else {
         return;
     };
@@ -418,9 +424,18 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         String::new()
     };
 
+    let mode_hint = match app.view_mode {
+        crate::app::DiffViewMode::Unified => "s: split",
+        crate::app::DiffViewMode::SideBySide => "s: unified",
+    };
+
     let hints = match app.focus {
-        Focus::Sidebar => "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  Tab: diff  q: quit",
-        Focus::Diff => "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  h: sidebar  q: quit",
+        Focus::Sidebar => format!(
+            "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  {mode_hint}  Tab: diff  q: quit"
+        ),
+        Focus::Diff => format!(
+            "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  {mode_hint}  h: sidebar  q: quit"
+        ),
     };
 
     let status = Line::from(vec![
@@ -437,18 +452,311 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         Span::styled(format!("-{}", total_removed), Style::default().fg(colors.fg_removed)),
         Span::styled(search_info, Style::default().fg(colors.fg_accent)),
         Span::raw("  "),
-        Span::styled(hints, Style::default().fg(colors.fg_muted)),
+        Span::styled(&hints, Style::default().fg(colors.fg_muted)),
     ]);
 
     frame.render_widget(Paragraph::new(status), area);
 }
 
+fn draw_file_diff_split(
+    frame: &mut Frame,
+    app: &App,
+    diff: &model::Diff,
+    area: Rect,
+    ss: &SyntaxSet,
+    theme: &Theme,
+    colors: &ColorsConfig,
+) {
+    let Some(file) = diff.files.get(app.selected_file) else {
+        return;
+    };
+    let is_focused = matches!(app.focus, Focus::Diff);
+
+    let panels = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    let left_area = panels[0];
+    let right_area = panels[1];
+    let inner_height = left_area.height.saturating_sub(2) as usize;
+
+    let rows = split::build_split_rows(&file.hunks);
+
+    let match_lines = app.search.as_ref().map(|s| {
+        let current_line = s.matches.get(s.current).map(|m| m.line_index);
+        let all: std::collections::HashSet<usize> = s.matches.iter().map(|m| m.line_index).collect();
+        (all, current_line)
+    });
+
+    let syntax = Path::new(&file.path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| ss.find_syntax_by_extension(ext))
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+    let vis_start = app.scroll;
+    let vis_end = vis_start + inner_height;
+
+    let mut left_lines: Vec<Line> = Vec::with_capacity(inner_height);
+    let mut right_lines: Vec<Line> = Vec::with_capacity(inner_height);
+
+    // We need separate highlighters for left and right panels.
+    // Reset them at each hunk header.
+    let mut left_hl = HighlightLines::new(syntax, theme);
+    let mut right_hl = HighlightLines::new(syntax, theme);
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        if row_idx >= vis_end {
+            break;
+        }
+
+        // Reset highlighters on hunk boundaries
+        if matches!(row, SplitRow::HunkHeader(_)) {
+            left_hl = HighlightLines::new(syntax, theme);
+            right_hl = HighlightLines::new(syntax, theme);
+        }
+
+        if row_idx < vis_start {
+            // Feed highlighters to maintain state even for off-screen rows
+            match row {
+                SplitRow::Context(line) | SplitRow::Paired { left: line, .. } => {
+                    let _ = left_hl.highlight_line(line.content.trim_end(), ss);
+                }
+                SplitRow::LeftOnly(line) => {
+                    let _ = left_hl.highlight_line(line.content.trim_end(), ss);
+                }
+                _ => {}
+            }
+            match row {
+                SplitRow::Context(line) | SplitRow::Paired { right: line, .. } => {
+                    let _ = right_hl.highlight_line(line.content.trim_end(), ss);
+                }
+                SplitRow::RightOnly(line) => {
+                    let _ = right_hl.highlight_line(line.content.trim_end(), ss);
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        let search_bg = match_lines.as_ref().and_then(|(all, current)| {
+            if all.contains(&row_idx) {
+                let is_current = *current == Some(row_idx);
+                Some(if is_current { colors.bg_search_current } else { colors.bg_search_match })
+            } else {
+                None
+            }
+        });
+
+        match row {
+            SplitRow::HunkHeader(header) => {
+                let text = header.trim_end().to_string();
+                let mut left_spans = vec![Span::styled(text.clone(), Style::default().fg(colors.fg_muted))];
+                let mut right_spans = vec![Span::styled(text, Style::default().fg(colors.fg_muted))];
+                if let Some(bg) = search_bg {
+                    left_spans = highlight_search_in_spans(left_spans, app, bg);
+                    right_spans = highlight_search_in_spans(right_spans, app, bg);
+                }
+                left_lines.push(Line::from(left_spans));
+                right_lines.push(Line::from(right_spans));
+            }
+            SplitRow::Context(line) => {
+                let content = line.content.trim_end();
+                let mut l_spans = build_syntax_spans(content, &mut left_hl, ss, None, " ", colors);
+                let mut r_spans = build_syntax_spans(content, &mut right_hl, ss, None, " ", colors);
+                if let Some(bg) = search_bg {
+                    l_spans = highlight_search_in_spans(l_spans, app, bg);
+                    r_spans = highlight_search_in_spans(r_spans, app, bg);
+                }
+                left_lines.push(Line::from(l_spans));
+                right_lines.push(Line::from(r_spans));
+            }
+            SplitRow::Paired { left, right, left_spans: l_inline, right_spans: r_inline } => {
+                let l_content = left.content.trim_end();
+                let r_content = right.content.trim_end();
+
+                let mut l_spans = build_syntax_spans(l_content, &mut left_hl, ss, Some(colors.bg_removed), "-", colors);
+                let mut r_spans = build_syntax_spans(r_content, &mut right_hl, ss, Some(colors.bg_added), "+", colors);
+
+                l_spans = apply_inline_highlight(l_spans, l_inline, colors.bg_inline_removed);
+                r_spans = apply_inline_highlight(r_spans, r_inline, colors.bg_inline_added);
+
+                if let Some(bg) = search_bg {
+                    l_spans = highlight_search_in_spans(l_spans, app, bg);
+                    r_spans = highlight_search_in_spans(r_spans, app, bg);
+                }
+                left_lines.push(Line::from(l_spans));
+                right_lines.push(Line::from(r_spans));
+            }
+            SplitRow::LeftOnly(line) => {
+                let content = line.content.trim_end();
+                let mut l_spans = build_syntax_spans(content, &mut left_hl, ss, Some(colors.bg_removed), "-", colors);
+                if let Some(bg) = search_bg {
+                    l_spans = highlight_search_in_spans(l_spans, app, bg);
+                }
+                left_lines.push(Line::from(l_spans));
+                right_lines.push(Line::from(vec![]));
+            }
+            SplitRow::RightOnly(line) => {
+                let content = line.content.trim_end();
+                let mut r_spans = build_syntax_spans(content, &mut right_hl, ss, Some(colors.bg_added), "+", colors);
+                if let Some(bg) = search_bg {
+                    r_spans = highlight_search_in_spans(r_spans, app, bg);
+                }
+                left_lines.push(Line::from(vec![]));
+                right_lines.push(Line::from(r_spans));
+            }
+        }
+    }
+
+    if file.hunks.is_empty() {
+        let msg = Span::styled("Binary file changed", Style::default().fg(colors.fg_muted));
+        left_lines.push(Line::from(msg.clone()));
+        right_lines.push(Line::from(msg));
+    }
+
+    let viewed_indicator = if file.viewed { " ✓" } else { "" };
+    let border_style = if is_focused {
+        Style::default().fg(colors.border_focused)
+    } else {
+        Style::default().fg(colors.border_unfocused)
+    };
+
+    let left_title = format!(" {}{} ", file.path, viewed_indicator);
+    let left_widget = Paragraph::new(left_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(Span::styled(left_title, Style::default().add_modifier(Modifier::BOLD))),
+    );
+
+    let right_title = format!(" {}{} ", file.path, viewed_indicator);
+    let right_widget = Paragraph::new(right_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(Span::styled(right_title, Style::default().add_modifier(Modifier::BOLD))),
+    );
+
+    frame.render_widget(left_widget, left_area);
+    frame.render_widget(right_widget, right_area);
+}
+
+/// Build syntax-highlighted spans for a single line with an optional diff background.
+fn build_syntax_spans<'a>(
+    content: &str,
+    highlighter: &mut HighlightLines,
+    ss: &SyntaxSet,
+    diff_bg: Option<Color>,
+    prefix: &str,
+    colors: &ColorsConfig,
+) -> Vec<Span<'a>> {
+    let prefix_style = match prefix {
+        "+" => Style::default().fg(colors.fg_added),
+        "-" => Style::default().fg(colors.fg_removed),
+        _ => Style::default().fg(colors.fg),
+    };
+    let prefix_style = if let Some(bg) = diff_bg { prefix_style.bg(bg) } else { prefix_style };
+
+    let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
+
+    if let Ok(highlighted) = highlighter.highlight_line(content, ss) {
+        for (style, text) in highlighted {
+            let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+            let mut s = Style::default().fg(fg);
+            if let Some(bg) = diff_bg {
+                s = s.bg(bg);
+            }
+            spans.push(Span::styled(text.to_string(), s));
+        }
+    } else {
+        let mut s = Style::default();
+        if let Some(bg) = diff_bg {
+            s = s.bg(bg);
+        }
+        spans.push(Span::styled(content.to_string(), s));
+    }
+
+    spans
+}
+
+/// Apply inline change highlighting to syntax-highlighted spans.
+/// Splits spans at InlineSpan boundaries and applies highlight_bg to changed segments.
+/// The prefix span (index 0) is not modified.
+fn apply_inline_highlight<'a>(
+    spans: Vec<Span<'a>>,
+    inline_spans: &[InlineSpan],
+    highlight_bg: Color,
+) -> Vec<Span<'a>> {
+    if inline_spans.is_empty() || inline_spans.iter().all(|s| !s.changed) {
+        return spans;
+    }
+
+    let mut result: Vec<Span<'a>> = Vec::new();
+
+    // The first span is the prefix (+/-/space) — pass through unchanged
+    let mut span_iter = spans.into_iter();
+    if let Some(prefix) = span_iter.next() {
+        result.push(prefix);
+    }
+
+    // Collect remaining spans and track byte positions (relative to content, not prefix)
+    let remaining: Vec<Span<'a>> = span_iter.collect();
+    let mut content_offset: usize = 0;
+
+    for span in remaining {
+        let span_text = span.content.to_string();
+        let span_start = content_offset;
+        let span_end = span_start + span_text.len();
+        let base_style = span.style;
+
+        let mut pos = span_start;
+        for inline in inline_spans {
+            // Find overlap between this span segment and this inline span
+            let overlap_start = pos.max(inline.start);
+            let overlap_end = span_end.min(inline.end);
+
+            if overlap_start >= overlap_end {
+                continue;
+            }
+
+            // Emit any part before this inline span
+            if pos < overlap_start {
+                let s = &span_text[pos - span_start..overlap_start - span_start];
+                result.push(Span::styled(s.to_string(), base_style));
+            }
+
+            // Emit the overlapping part with highlight
+            let s = &span_text[overlap_start - span_start..overlap_end - span_start];
+            let style = if inline.changed {
+                base_style.bg(highlight_bg)
+            } else {
+                base_style
+            };
+            result.push(Span::styled(s.to_string(), style));
+
+            pos = overlap_end;
+        }
+
+        // Emit any remaining part after all inline spans
+        if pos < span_end {
+            let s = &span_text[pos - span_start..];
+            result.push(Span::styled(s.to_string(), base_style));
+        }
+
+        content_offset = span_end;
+    }
+
+    result
+}
+
 /// Count the total number of rendered lines for a file's diff.
-pub fn diff_line_count(file: &model::DiffFile) -> usize {
-    file.hunks
-        .iter()
-        .map(|h| 1 + h.lines.len())
-        .sum()
+pub fn diff_line_count(file: &model::DiffFile, view_mode: DiffViewMode) -> usize {
+    match view_mode {
+        DiffViewMode::Unified => file.hunks.iter().map(|h| 1 + h.lines.len()).sum(),
+        DiffViewMode::SideBySide => split::split_row_count(&file.hunks),
+    }
 }
 
 #[cfg(test)]
@@ -632,6 +940,6 @@ mod tests {
             ],
         );
         // 2 hunks: (1 header + 2 lines) + (1 header + 1 line) = 5
-        assert_eq!(diff_line_count(&file), 5);
+        assert_eq!(diff_line_count(&file, DiffViewMode::Unified), 5);
     }
 }

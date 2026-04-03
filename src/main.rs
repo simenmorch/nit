@@ -128,6 +128,7 @@ fn handle_key(
         KeyCode::Char('/') => { app.start_search(); return KeyAction::Continue; }
         KeyCode::Char('n') => { app.next_match(viewport_height); return KeyAction::Continue; }
         KeyCode::Char('N') => { app.prev_match(viewport_height); return KeyAction::Continue; }
+        KeyCode::Char('s') => { app.toggle_view_mode(); return KeyAction::Continue; }
         _ => {}
     }
 
@@ -189,7 +190,7 @@ fn run(
             let content_height = diff
                 .files
                 .get(app.selected_file)
-                .map(ui::diff_line_count)
+                .map(|f| ui::diff_line_count(f, app.view_mode))
                 .unwrap_or(0);
 
             if let Event::Key(key) = event::read()?

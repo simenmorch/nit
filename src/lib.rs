@@ -4,6 +4,7 @@ pub mod git;
 pub mod github;
 pub mod model;
 pub mod provider;
+pub mod split;
 pub mod tree;
 pub mod ui;
 

@@ -7,6 +7,13 @@ pub enum Focus {
     Diff,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum DiffViewMode {
+    #[default]
+    Unified,
+    SideBySide,
+}
+
 pub struct SearchState {
     pub query: String,
     pub matches: Vec<SearchMatch>,
@@ -21,6 +28,7 @@ pub struct SearchMatch {
 pub struct App {
     pub focus: Focus,
     pub show_sidebar: bool,
+    pub view_mode: DiffViewMode,
     pub selected: usize,
     pub selected_file: usize,
     pub scroll: usize,
@@ -43,6 +51,7 @@ impl App {
         Self {
             focus: Focus::Sidebar,
             show_sidebar: true,
+            view_mode: DiffViewMode::default(),
             selected: 0,
             selected_file: 0,
             scroll: 0,
@@ -210,6 +219,23 @@ impl App {
         }
     }
 
+    pub fn toggle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            DiffViewMode::Unified => DiffViewMode::SideBySide,
+            DiffViewMode::SideBySide => DiffViewMode::Unified,
+        };
+        self.scroll = 0;
+        match self.view_mode {
+            DiffViewMode::SideBySide => {
+                self.show_sidebar = false;
+                self.focus = Focus::Diff;
+            }
+            DiffViewMode::Unified => {
+                self.show_sidebar = true;
+            }
+        }
+    }
+
     pub fn jump_to_top(&mut self, visible: &[FlatEntry]) {
         match self.focus {
             Focus::Sidebar => {
@@ -283,22 +309,46 @@ impl App {
         };
 
         let query_lower = query.to_lowercase();
-        let mut matches = Vec::new();
-        let mut line_index: usize = 0;
-
-        for hunk in &file.hunks {
-            if hunk.header.to_lowercase().contains(&query_lower) {
-                matches.push(SearchMatch { line_index });
-            }
-            line_index += 1;
-
-            for line in &hunk.lines {
-                if line.content.to_lowercase().contains(&query_lower) {
-                    matches.push(SearchMatch { line_index });
+        let matches = match self.view_mode {
+            DiffViewMode::Unified => {
+                let mut matches = Vec::new();
+                let mut line_index: usize = 0;
+                for hunk in &file.hunks {
+                    if hunk.header.to_lowercase().contains(&query_lower) {
+                        matches.push(SearchMatch { line_index });
+                    }
+                    line_index += 1;
+                    for line in &hunk.lines {
+                        if line.content.to_lowercase().contains(&query_lower) {
+                            matches.push(SearchMatch { line_index });
+                        }
+                        line_index += 1;
+                    }
                 }
-                line_index += 1;
+                matches
             }
-        }
+            DiffViewMode::SideBySide => {
+                use crate::split::{self, SplitRow};
+                let rows = split::build_split_rows(&file.hunks);
+                let mut matches = Vec::new();
+                for (i, row) in rows.iter().enumerate() {
+                    let hit = match row {
+                        SplitRow::HunkHeader(h) => h.to_lowercase().contains(&query_lower),
+                        SplitRow::Context(line) => line.content.to_lowercase().contains(&query_lower),
+                        SplitRow::Paired { left, right, .. } => {
+                            left.content.to_lowercase().contains(&query_lower)
+                                || right.content.to_lowercase().contains(&query_lower)
+                        }
+                        SplitRow::LeftOnly(line) => line.content.to_lowercase().contains(&query_lower),
+                        SplitRow::RightOnly(line) => line.content.to_lowercase().contains(&query_lower),
+                    };
+                    if hit {
+                        matches.push(SearchMatch { line_index: i });
+                    }
+                }
+                matches
+            }
+        };
 
         if let Some(m) = matches.first() {
             self.scroll = m.line_index;
@@ -345,13 +395,12 @@ impl App {
         let Some(file) = diff.files.get(self.selected_file) else {
             return;
         };
-        let mut line_index: usize = 0;
-        for hunk in &file.hunks {
-            if line_index > self.scroll {
-                self.scroll = line_index;
+        let hunk_starts = self.hunk_starts(&file.hunks);
+        for &start in &hunk_starts {
+            if start > self.scroll {
+                self.scroll = start;
                 return;
             }
-            line_index += 1 + hunk.lines.len();
         }
     }
 
@@ -359,17 +408,27 @@ impl App {
         let Some(file) = diff.files.get(self.selected_file) else {
             return;
         };
-        let mut hunk_starts = Vec::new();
-        let mut line_index: usize = 0;
-        for hunk in &file.hunks {
-            hunk_starts.push(line_index);
-            line_index += 1 + hunk.lines.len();
-        }
+        let hunk_starts = self.hunk_starts(&file.hunks);
         for &start in hunk_starts.iter().rev() {
             if start < self.scroll {
                 self.scroll = start;
                 return;
             }
+        }
+    }
+
+    fn hunk_starts(&self, hunks: &[crate::model::Hunk]) -> Vec<usize> {
+        match self.view_mode {
+            DiffViewMode::Unified => {
+                let mut starts = Vec::new();
+                let mut idx: usize = 0;
+                for hunk in hunks {
+                    starts.push(idx);
+                    idx += 1 + hunk.lines.len();
+                }
+                starts
+            }
+            DiffViewMode::SideBySide => crate::split::hunk_start_rows(hunks),
         }
     }
 }

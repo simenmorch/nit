@@ -1659,6 +1659,7 @@ dependencies = [
  "octocrab",
  "ratatui",
  "serde",
+ "similar",
  "sublime-color-scheme",
  "syntect",
  "tempfile",

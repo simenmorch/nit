@@ -64,6 +64,10 @@ pub struct ColorsConfig {
     pub bg_search_match: Color,
     #[serde(deserialize_with = "deserialize_hex_color")]
     pub bg_search_current: Color,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub bg_inline_added: Color,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub bg_inline_removed: Color,
 }
 
 impl Default for ColorsConfig {
@@ -83,6 +87,8 @@ impl Default for ColorsConfig {
             bg_removed: Color::Rgb(60, 30, 30),
             bg_search_match: Color::Rgb(120, 100, 30),
             bg_search_current: Color::Rgb(180, 140, 20),
+            bg_inline_added: Color::Rgb(40, 80, 40),
+            bg_inline_removed: Color::Rgb(80, 40, 40),
         }
     }
 }
@@ -286,6 +292,8 @@ bg_added = "#1e3c1e"
 bg_removed = "#3c1e1e"
 bg_search_match = "#786420"
 bg_search_current = "#b48c14"
+bg_inline_added = "#285028"
+bg_inline_removed = "#502828"
 "##;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.theme.syntax, "Monokai");
