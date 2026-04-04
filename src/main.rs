@@ -1,3 +1,6 @@
+use std::time::Duration;
+//test
+
 use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -76,12 +79,14 @@ fn main() -> Result<()> {
     let tree = tree::FileTree::from_files(&diff.files);
 
     let mut terminal = ratatui::init();
+    let is_live = cli.rev.is_none();
     let result = run(
         &mut terminal,
         diff,
         tree,
         label,
         &repo,
+        is_live,
         commits,
         prs,
         github_remote,
@@ -381,6 +386,7 @@ fn run(
     mut tree: tree::FileTree,
     mut label: String,
     repo: &git2::Repository,
+    is_live: bool,
     commits: Vec<model::CommitInfo>,
     prs: Vec<model::PrInfo>,
     github_remote: Option<(String, String)>,
@@ -394,7 +400,7 @@ fn run(
     app.prs = prs;
     app.pr_filter.github_user = github_user;
 
-    let original_diff = diff.clone();
+    let mut original_diff = diff.clone();
     let original_label = label.clone();
 
     loop {
@@ -415,6 +421,12 @@ fn run(
         let viewport_height = terminal.size()?.height as usize;
 
         // Process events — drain pending queue before redrawing
+        let poll_timeout = if is_live {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(86400)
+        };
+
         let mut visible = visible;
         loop {
             let content_height = diff
@@ -422,6 +434,24 @@ fn run(
                 .get(app.selected_file)
                 .map(|f| ui::diff_line_count(f, app.view_mode))
                 .unwrap_or(0);
+
+            if !event::poll(poll_timeout)? {
+                // Timeout — refresh uncommitted diff if in default view
+                if is_live
+                    && matches!(app.view_context, app::ViewContext::Default)
+                    && let Ok(mut new_diff) = git::get_uncommitted_diff(repo)
+                    && !diff_content_eq(&diff, &new_diff)
+                {
+                    transfer_viewed(&diff, &mut new_diff);
+                    diff = new_diff;
+                    tree = tree::FileTree::from_files(&diff.files);
+                    original_diff = diff.clone();
+                    if !diff.files.is_empty() && app.selected_file >= diff.files.len() {
+                        app.selected_file = diff.files.len() - 1;
+                    }
+                }
+                break;
+            }
 
             if let Event::Key(key) = event::read()? {
                 match handle_key(
@@ -525,6 +555,28 @@ fn run(
             if !event::poll(std::time::Duration::ZERO)? {
                 break;
             }
+        }
+    }
+}
+
+/// Check whether two diffs have the same content (ignoring UI state like `viewed`).
+fn diff_content_eq(a: &model::Diff, b: &model::Diff) -> bool {
+    if a.files.len() != b.files.len() {
+        return false;
+    }
+    a.files.iter().zip(b.files.iter()).all(|(fa, fb)| {
+        fa.path == fb.path
+            && fa.added == fb.added
+            && fa.removed == fb.removed
+            && fa.hunks.len() == fb.hunks.len()
+    })
+}
+
+/// Carry over `viewed` flags from the old diff to a new diff.
+fn transfer_viewed(old: &model::Diff, new: &mut model::Diff) {
+    for file in &mut new.files {
+        if let Some(old_file) = old.files.iter().find(|f| f.path == file.path) {
+            file.viewed = old_file.viewed;
         }
     }
 }
