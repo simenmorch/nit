@@ -19,7 +19,7 @@ fn main() -> Result<()> {
 
     let repo = git::open_repo()?;
 
-    let (mut diff, label) = match cli.rev.as_deref() {
+    let (diff, label) = match cli.rev.as_deref() {
         None => {
             let diff = git::get_uncommitted_diff(&repo)?;
             let branch = git::branch_name(&repo);
@@ -34,7 +34,15 @@ fn main() -> Result<()> {
             let (owner, repo_name, pr_number) = parse_pr_ref(rev, &repo)?;
             let provider = github::GitHubProvider::new(owner.clone(), repo_name.clone())?;
             let diff = provider.fetch_diff(&pr_number)?;
-            let label = format!("{}#{}", if owner.is_empty() { String::new() } else { format!("{}/{} ", owner, repo_name) }, pr_number);
+            let label = format!(
+                "{}#{}",
+                if owner.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}/{} ", owner, repo_name)
+                },
+                pr_number
+            );
             (diff, label)
         }
         Some(rev) => {
@@ -42,6 +50,8 @@ fn main() -> Result<()> {
             (diff, rev.to_string())
         }
     };
+
+    let commits = git::get_commit_log(&repo, 500).unwrap_or_default();
 
     let cfg = config::load()?;
 
@@ -51,7 +61,17 @@ fn main() -> Result<()> {
     let tree = tree::FileTree::from_files(&diff.files);
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut diff, &tree, &label, &ss, &theme, &cfg.colors);
+    let result = run(
+        &mut terminal,
+        diff,
+        tree,
+        label,
+        &repo,
+        commits,
+        &ss,
+        &theme,
+        &cfg.colors,
+    );
     ratatui::restore();
 
     result
@@ -60,6 +80,8 @@ fn main() -> Result<()> {
 enum KeyAction {
     Continue,
     Quit,
+    LoadCommitDiff(String),
+    ReturnToDefault,
 }
 
 fn handle_key(
@@ -75,7 +97,9 @@ fn handle_key(
         match key.code {
             KeyCode::Enter => app.submit_search(diff),
             KeyCode::Esc => app.cancel_search(),
-            KeyCode::Backspace => { app.search_input.pop(); }
+            KeyCode::Backspace => {
+                app.search_input.pop();
+            }
             KeyCode::Char(c) => app.search_input.push(c),
             _ => {}
         }
@@ -86,12 +110,59 @@ fn handle_key(
     if app.g_pressed {
         app.g_pressed = false;
         if key.code == KeyCode::Char('g') {
-            app.jump_to_top(visible);
+            match app.active_tab {
+                app::Tab::Diff => app.jump_to_top(visible),
+                app::Tab::Commits => app.jump_to_top_commits(),
+            }
             return KeyAction::Continue;
         }
     }
 
-    // Ctrl-modified keys (check before plain char matches)
+    // Global keys (work regardless of tab)
+    match key.code {
+        KeyCode::Char('q') => return KeyAction::Quit,
+        KeyCode::Char('1') => {
+            app.switch_tab(app::Tab::Diff);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('2') => {
+            app.switch_tab(app::Tab::Commits);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('g') => {
+            app.g_pressed = true;
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('G') => {
+            match app.active_tab {
+                app::Tab::Diff => {
+                    app.jump_to_bottom(visible, content_height, viewport_height);
+                }
+                app::Tab::Commits => app.jump_to_bottom_commits(),
+            }
+            return KeyAction::Continue;
+        }
+        _ => {}
+    }
+
+    // Tab-specific dispatch
+    match app.active_tab {
+        app::Tab::Diff => {
+            handle_diff_tab_key(key, app, diff, visible, content_height, viewport_height)
+        }
+        app::Tab::Commits => handle_commits_tab_key(key, app, viewport_height),
+    }
+}
+
+fn handle_diff_tab_key(
+    key: KeyEvent,
+    app: &mut app::App,
+    diff: &mut model::Diff,
+    visible: &[tree::FlatEntry],
+    content_height: usize,
+    viewport_height: usize,
+) -> KeyAction {
+    // Ctrl-modified keys
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('d') => {
@@ -114,21 +185,36 @@ fn handle_key(
         }
     }
 
-    // Global keys (work in any focus)
+    // Diff-tab global keys
     match key.code {
-        KeyCode::Char('q') => return KeyAction::Quit,
-        KeyCode::Tab => { app.toggle_sidebar(); return KeyAction::Continue; }
-        KeyCode::Char('v') => { app.toggle_viewed_entry(diff, visible); return KeyAction::Continue; }
-        KeyCode::Char('V') => { app.mark_viewed_and_next(diff, visible); return KeyAction::Continue; }
-        KeyCode::Char('g') => { app.g_pressed = true; return KeyAction::Continue; }
-        KeyCode::Char('G') => {
-            app.jump_to_bottom(visible, content_height, viewport_height);
+        KeyCode::Tab => {
+            app.toggle_sidebar();
             return KeyAction::Continue;
         }
-        KeyCode::Char('/') => { app.start_search(); return KeyAction::Continue; }
-        KeyCode::Char('n') => { app.next_match(viewport_height); return KeyAction::Continue; }
-        KeyCode::Char('N') => { app.prev_match(viewport_height); return KeyAction::Continue; }
-        KeyCode::Char('s') => { app.toggle_view_mode(); return KeyAction::Continue; }
+        KeyCode::Char('v') => {
+            app.toggle_viewed_entry(diff, visible);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('V') => {
+            app.mark_viewed_and_next(diff, visible);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('/') => {
+            app.start_search();
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('n') => {
+            app.next_match(viewport_height);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('N') => {
+            app.prev_match(viewport_height);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('s') => {
+            app.toggle_view_mode();
+            return KeyAction::Continue;
+        }
         _ => {}
     }
 
@@ -140,7 +226,13 @@ fn handle_key(
             KeyCode::Enter => app.activate_entry(visible),
             KeyCode::Char('l') => app.open_file(visible),
             KeyCode::Char(' ') => app.toggle_fold(visible),
-            KeyCode::Esc => app.clear_search(),
+            KeyCode::Esc => {
+                if app.search.is_some() {
+                    app.clear_search();
+                } else if matches!(app.view_context, app::ViewContext::Commit { .. }) {
+                    return KeyAction::ReturnToDefault;
+                }
+            }
             _ => {}
         },
         app::Focus::Diff => match key.code {
@@ -149,7 +241,13 @@ fn handle_key(
             }
             KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
             KeyCode::Char('h') => app.focus_sidebar(),
-            KeyCode::Esc => app.clear_search(),
+            KeyCode::Esc => {
+                if app.search.is_some() {
+                    app.clear_search();
+                } else if matches!(app.view_context, app::ViewContext::Commit { .. }) {
+                    return KeyAction::ReturnToDefault;
+                }
+            }
             _ => {}
         },
     }
@@ -157,16 +255,52 @@ fn handle_key(
     KeyAction::Continue
 }
 
+fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize) -> KeyAction {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('d') => {
+                app.scroll_commits_down_half_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('u') => {
+                app.scroll_commits_up_half_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => app.select_next_commit(),
+        KeyCode::Char('k') | KeyCode::Up => app.select_prev_commit(),
+        KeyCode::Enter => {
+            if let Some(commit) = app.commits.get(app.commit_selected) {
+                return KeyAction::LoadCommitDiff(commit.oid.clone());
+            }
+        }
+        _ => {}
+    }
+    KeyAction::Continue
+}
+
+
+#[allow(clippy::too_many_arguments)]
 fn run(
     terminal: &mut DefaultTerminal,
-    diff: &mut model::Diff,
-    tree: &tree::FileTree,
-    branch: &str,
+    mut diff: model::Diff,
+    mut tree: tree::FileTree,
+    mut label: String,
+    repo: &git2::Repository,
+    commits: Vec<model::CommitInfo>,
     ss: &SyntaxSet,
     theme: &syntect::highlighting::Theme,
     colors: &config::ColorsConfig,
 ) -> Result<()> {
     let mut app = app::App::new();
+    app.commits = commits;
+
+    let original_diff = diff.clone();
+    let original_label = label.clone();
 
     loop {
         let visible = tree.flatten(&app.collapsed);
@@ -177,10 +311,11 @@ fn run(
             app.update_selected_file(&visible);
         }
 
-        let sidebar_height = (terminal.size()?.height as usize).saturating_sub(1);
+        let sidebar_height = (terminal.size()?.height as usize).saturating_sub(2);
         app.ensure_sidebar_visible(sidebar_height);
 
-        terminal.draw(|frame| ui::draw(frame, &app, diff, &visible, branch, ss, theme, colors))?;
+        terminal
+            .draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
 
         let viewport_height = terminal.size()?.height as usize;
 
@@ -193,13 +328,58 @@ fn run(
                 .map(|f| ui::diff_line_count(f, app.view_mode))
                 .unwrap_or(0);
 
-            if let Event::Key(key) = event::read()?
-                && matches!(
-                    handle_key(key, &mut app, diff, &visible, content_height, viewport_height),
-                    KeyAction::Quit
-                )
-            {
-                return Ok(());
+            if let Event::Key(key) = event::read()? {
+                match handle_key(
+                    key,
+                    &mut app,
+                    &mut diff,
+                    &visible,
+                    content_height,
+                    viewport_height,
+                ) {
+                    KeyAction::Quit => return Ok(()),
+                    KeyAction::LoadCommitDiff(oid) => {
+                        let commit_info = app
+                            .commits
+                            .iter()
+                            .find(|c| c.oid == oid);
+                        let message = commit_info
+                            .map(|c| c.message.clone())
+                            .unwrap_or_default();
+                        let short_oid = commit_info
+                            .map(|c| c.short_oid.clone())
+                            .unwrap_or_else(|| oid[..7.min(oid.len())].to_string());
+                        match git::get_commit_diff(repo, &oid) {
+                            Ok(new_diff) => {
+                                diff = new_diff;
+                                tree = tree::FileTree::from_files(&diff.files);
+                                label = format!("{} {}", short_oid, message);
+                                app.reset_diff_state();
+                                app.view_context =
+                                    app::ViewContext::Commit { short_oid, message, return_tab: app::Tab::Commits };
+                                app.active_tab = app::Tab::Diff;
+                            }
+                            Err(_) => {
+                                // Stay on commits tab; diff unchanged
+                            }
+                        }
+                        break;
+                    }
+                    KeyAction::ReturnToDefault => {
+                        let return_tab = match &app.view_context {
+                            app::ViewContext::Commit { return_tab, .. } => *return_tab,
+                            _ => app::Tab::Diff,
+                        };
+                        diff = original_diff.clone();
+                        label = original_label.clone();
+                        tree = tree::FileTree::from_files(&diff.files);
+                        app.reset_diff_state();
+                        app.view_context = app::ViewContext::Default;
+                        app.active_tab = return_tab;
+                        break;
+                    }
+                    KeyAction::Continue => {}
+                }
             }
 
             // Recompute visible tree in case a fold was toggled
@@ -207,6 +387,13 @@ fn run(
             if !visible.is_empty() && app.selected >= visible.len() {
                 app.selected = visible.len() - 1;
                 app.update_selected_file(&visible);
+            }
+
+            // Also keep commit scroll in sync
+            if app.active_tab == app::Tab::Commits {
+                let commit_area_height =
+                    (terminal.size()?.height as usize).saturating_sub(2);
+                app.ensure_commit_visible(commit_area_height);
             }
 
             // If no more events are queued, break to redraw
@@ -231,9 +418,16 @@ fn parse_pr_ref(rev: &str, repo: &git2::Repository) -> Result<(String, String, S
         let pr_number = parts[1];
         let slug_parts: Vec<&str> = slug.splitn(2, '/').collect();
         if slug_parts.len() != 2 {
-            anyhow::bail!("invalid PR reference '{}' — expected owner/repo#number", rev);
+            anyhow::bail!(
+                "invalid PR reference '{}' — expected owner/repo#number",
+                rev
+            );
         }
-        Ok((slug_parts[0].to_string(), slug_parts[1].to_string(), pr_number.to_string()))
+        Ok((
+            slug_parts[0].to_string(),
+            slug_parts[1].to_string(),
+            pr_number.to_string(),
+        ))
     } else {
         anyhow::bail!("invalid PR reference '{}'", rev);
     }

@@ -1,11 +1,11 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LineKind {
     Added,
     Removed,
     Context,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Line {
     pub kind: LineKind,
     pub content: String,
@@ -13,13 +13,13 @@ pub struct Line {
     pub new_num: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Hunk {
     pub header: String,
     pub lines: Vec<Line>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FileStatus {
     Modified,
     Added,
@@ -27,7 +27,7 @@ pub enum FileStatus {
     Renamed { from: String },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DiffFile {
     pub path: String,
     pub status: FileStatus,
@@ -37,7 +37,16 @@ pub struct DiffFile {
     pub viewed: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Diff {
     pub files: Vec<DiffFile>,
+}
+
+#[derive(Debug)]
+pub struct CommitInfo {
+    pub oid: String,
+    pub short_oid: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
 }

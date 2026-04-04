@@ -1,5 +1,7 @@
+use std::time::SystemTime;
+
 use anyhow::{Context, Result};
-use git2::{Delta, DiffOptions, Repository};
+use git2::{Delta, DiffOptions, Repository, Sort};
 
 use crate::model;
 
@@ -150,6 +152,78 @@ pub fn get_range_diff(repo: &Repository, from: &str, to: &str) -> Result<model::
         .context("failed to compute range diff")?;
 
     build_diff(&diff)
+}
+
+/// List recent commits from HEAD.
+pub fn get_commit_log(repo: &Repository, limit: usize) -> Result<Vec<model::CommitInfo>> {
+    let mut revwalk = repo.revwalk().context("failed to create revwalk")?;
+    revwalk.push_head().context("failed to push HEAD to revwalk")?;
+    revwalk.set_sorting(Sort::TIME | Sort::TOPOLOGICAL)?;
+
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let mut commits = Vec::new();
+    for oid_result in revwalk.take(limit) {
+        let oid = oid_result.context("revwalk error")?;
+        let commit = repo.find_commit(oid).context("failed to find commit")?;
+
+        let message = commit
+            .summary()
+            .unwrap_or("(no message)")
+            .to_string();
+        let author = commit
+            .author()
+            .name()
+            .unwrap_or("(unknown)")
+            .to_string();
+        let date = format_relative_time(now - commit.time().seconds());
+
+        let full_oid = oid.to_string();
+        let short_oid = full_oid[..7].to_string();
+        commits.push(model::CommitInfo {
+            oid: full_oid,
+            short_oid,
+            message,
+            author,
+            date,
+        });
+    }
+    Ok(commits)
+}
+
+fn format_relative_time(seconds_ago: i64) -> String {
+    const MINUTE: i64 = 60;
+    const TWO_MINUTES: i64 = 2 * MINUTE;
+    const HOUR: i64 = 60 * MINUTE;
+    const TWO_HOURS: i64 = 2 * HOUR;
+    const DAY: i64 = 24 * HOUR;
+    const TWO_DAYS: i64 = 2 * DAY;
+    const WEEK: i64 = 7 * DAY;
+    const TWO_WEEKS: i64 = 2 * WEEK;
+    const MONTH: i64 = 30 * DAY;
+    const TWO_MONTHS: i64 = 2 * MONTH;
+    const YEAR: i64 = 365 * DAY;
+    const TWO_YEARS: i64 = 2 * YEAR;
+
+    match seconds_ago {
+        ..0 => "in the future".to_string(),
+        0..MINUTE => "just now".to_string(),
+        MINUTE..TWO_MINUTES => "1 minute ago".to_string(),
+        s @ TWO_MINUTES..HOUR => format!("{} minutes ago", s / MINUTE),
+        HOUR..TWO_HOURS => "1 hour ago".to_string(),
+        s @ TWO_HOURS..DAY => format!("{} hours ago", s / HOUR),
+        DAY..TWO_DAYS => "1 day ago".to_string(),
+        s @ TWO_DAYS..WEEK => format!("{} days ago", s / DAY),
+        WEEK..TWO_WEEKS => "1 week ago".to_string(),
+        s @ TWO_WEEKS..MONTH => format!("{} weeks ago", s / WEEK),
+        MONTH..TWO_MONTHS => "1 month ago".to_string(),
+        s @ TWO_MONTHS..YEAR => format!("{} months ago", s / MONTH),
+        YEAR..TWO_YEARS => "1 year ago".to_string(),
+        s => format!("{} years ago", s / YEAR),
+    }
 }
 
 /// Convert a git2 Diff into our model.
@@ -381,6 +455,83 @@ mod tests {
         let diff = get_commit_diff(&repo, &oid.to_string()).unwrap();
         assert_eq!(diff.files.len(), 1);
         assert!(matches!(diff.files[0].status, model::FileStatus::Added));
+    }
+
+    // ── Commit log ──
+
+    #[test]
+    fn commit_log_returns_commits_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "v1", "first commit");
+        commit_file(&repo, "a.txt", "v2", "second commit");
+        commit_file(&repo, "a.txt", "v3", "third commit");
+
+        let log = get_commit_log(&repo, 100).unwrap();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0].message, "third commit");
+        assert_eq!(log[1].message, "second commit");
+        assert_eq!(log[2].message, "first commit");
+    }
+
+    #[test]
+    fn commit_log_respects_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "v1", "first");
+        commit_file(&repo, "a.txt", "v2", "second");
+        commit_file(&repo, "a.txt", "v3", "third");
+
+        let log = get_commit_log(&repo, 2).unwrap();
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn commit_log_has_short_oid() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "v1", "initial");
+
+        let log = get_commit_log(&repo, 10).unwrap();
+        assert_eq!(log[0].oid.len(), 40);
+        assert_eq!(log[0].short_oid.len(), 7);
+    }
+
+    #[test]
+    fn commit_log_captures_author() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "v1", "initial");
+
+        let log = get_commit_log(&repo, 10).unwrap();
+        assert_eq!(log[0].author, "Test");
+    }
+
+    // ── format_relative_time ──
+
+    #[test]
+    fn relative_time_just_now() {
+        assert_eq!(format_relative_time(30), "just now");
+    }
+
+    #[test]
+    fn relative_time_minutes() {
+        assert_eq!(format_relative_time(120), "2 minutes ago");
+    }
+
+    #[test]
+    fn relative_time_hours() {
+        assert_eq!(format_relative_time(7200), "2 hours ago");
+    }
+
+    #[test]
+    fn relative_time_days() {
+        assert_eq!(format_relative_time(172800), "2 days ago");
+    }
+
+    #[test]
+    fn relative_time_future() {
+        assert_eq!(format_relative_time(-10), "in the future");
     }
 
     #[test]

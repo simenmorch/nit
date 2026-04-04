@@ -1,10 +1,24 @@
 use std::collections::HashSet;
 
+use crate::model;
 use crate::tree::{FlatEntry, FlatEntryKind};
 
 pub enum Focus {
     Sidebar,
     Diff,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    #[default]
+    Diff,
+    Commits,
+}
+
+#[derive(Clone)]
+pub enum ViewContext {
+    Default,
+    Commit { short_oid: String, message: String, return_tab: Tab },
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +52,11 @@ pub struct App {
     pub searching: bool,
     pub search_input: String,
     pub search: Option<SearchState>,
+    pub active_tab: Tab,
+    pub commits: Vec<model::CommitInfo>,
+    pub commit_selected: usize,
+    pub commit_scroll: usize,
+    pub view_context: ViewContext,
 }
 
 impl Default for App {
@@ -61,6 +80,11 @@ impl App {
             searching: false,
             search_input: String::new(),
             search: None,
+            active_tab: Tab::default(),
+            commits: Vec::new(),
+            commit_selected: 0,
+            commit_scroll: 0,
+            view_context: ViewContext::Default,
         }
     }
 
@@ -415,6 +439,74 @@ impl App {
                 return;
             }
         }
+    }
+
+    pub fn switch_tab(&mut self, tab: Tab) {
+        self.active_tab = tab;
+        self.g_pressed = false;
+    }
+
+    pub fn select_next_commit(&mut self) {
+        if !self.commits.is_empty() && self.commit_selected < self.commits.len() - 1 {
+            self.commit_selected += 1;
+        }
+    }
+
+    pub fn select_prev_commit(&mut self) {
+        if self.commit_selected > 0 {
+            self.commit_selected -= 1;
+        }
+    }
+
+    pub fn ensure_commit_visible(&mut self, height: usize) {
+        let usable = height.saturating_sub(2);
+        if usable == 0 {
+            return;
+        }
+        if self.commit_selected < self.commit_scroll {
+            self.commit_scroll = self.commit_selected;
+        } else if self.commit_selected >= self.commit_scroll + usable {
+            self.commit_scroll = self.commit_selected - usable + 1;
+        }
+    }
+
+    pub fn scroll_commits_down_half_page(&mut self, viewport_height: usize) {
+        let half = viewport_height / 2;
+        if !self.commits.is_empty() {
+            self.commit_selected =
+                (self.commit_selected + half).min(self.commits.len() - 1);
+        }
+    }
+
+    pub fn scroll_commits_up_half_page(&mut self, viewport_height: usize) {
+        let half = viewport_height / 2;
+        self.commit_selected = self.commit_selected.saturating_sub(half);
+    }
+
+    pub fn jump_to_top_commits(&mut self) {
+        self.commit_selected = 0;
+        self.commit_scroll = 0;
+    }
+
+    pub fn jump_to_bottom_commits(&mut self) {
+        if !self.commits.is_empty() {
+            self.commit_selected = self.commits.len() - 1;
+        }
+    }
+
+    pub fn reset_diff_state(&mut self) {
+        self.focus = Focus::Sidebar;
+        self.show_sidebar = true;
+        self.view_mode = DiffViewMode::default();
+        self.selected = 0;
+        self.selected_file = 0;
+        self.scroll = 0;
+        self.sidebar_scroll = 0;
+        self.collapsed.clear();
+        self.g_pressed = false;
+        self.searching = false;
+        self.search_input.clear();
+        self.search = None;
     }
 
     fn hunk_starts(&self, hunks: &[crate::model::Hunk]) -> Vec<usize> {
@@ -876,6 +968,137 @@ mod tests {
         // First hunk is at line_index 0, has 1 header + 2 lines = 3 total
         // Second hunk starts at line_index 3
         assert_eq!(app.scroll, 3);
+    }
+
+    // ── Tabs ──
+
+    #[test]
+    fn switch_tab_changes_active() {
+        let mut app = App::new();
+        assert_eq!(app.active_tab, Tab::Diff);
+        app.switch_tab(Tab::Commits);
+        assert_eq!(app.active_tab, Tab::Commits);
+        app.switch_tab(Tab::Diff);
+        assert_eq!(app.active_tab, Tab::Diff);
+    }
+
+    // ── Commit navigation ──
+
+    fn sample_commits(n: usize) -> Vec<crate::model::CommitInfo> {
+        (0..n)
+            .map(|i| crate::model::CommitInfo {
+                oid: format!("{:040x}", i),
+                short_oid: format!("{:07x}", i),
+                message: format!("commit {}", i),
+                author: "Test".to_string(),
+                date: "just now".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn select_next_commit_advances() {
+        let mut app = App::new();
+        app.commits = sample_commits(5);
+        app.select_next_commit();
+        assert_eq!(app.commit_selected, 1);
+    }
+
+    #[test]
+    fn select_next_commit_stops_at_end() {
+        let mut app = App::new();
+        app.commits = sample_commits(3);
+        app.commit_selected = 2;
+        app.select_next_commit();
+        assert_eq!(app.commit_selected, 2);
+    }
+
+    #[test]
+    fn select_prev_commit_decrements() {
+        let mut app = App::new();
+        app.commits = sample_commits(5);
+        app.commit_selected = 3;
+        app.select_prev_commit();
+        assert_eq!(app.commit_selected, 2);
+    }
+
+    #[test]
+    fn select_prev_commit_stops_at_zero() {
+        let mut app = App::new();
+        app.commits = sample_commits(5);
+        app.select_prev_commit();
+        assert_eq!(app.commit_selected, 0);
+    }
+
+    #[test]
+    fn jump_to_top_commits_resets() {
+        let mut app = App::new();
+        app.commits = sample_commits(10);
+        app.commit_selected = 7;
+        app.commit_scroll = 5;
+        app.jump_to_top_commits();
+        assert_eq!(app.commit_selected, 0);
+        assert_eq!(app.commit_scroll, 0);
+    }
+
+    #[test]
+    fn jump_to_bottom_commits_goes_to_last() {
+        let mut app = App::new();
+        app.commits = sample_commits(10);
+        app.jump_to_bottom_commits();
+        assert_eq!(app.commit_selected, 9);
+    }
+
+    #[test]
+    fn ensure_commit_visible_scrolls_down() {
+        let mut app = App::new();
+        app.commit_selected = 25;
+        app.commit_scroll = 0;
+        app.ensure_commit_visible(20);
+        assert!(app.commit_scroll > 0);
+    }
+
+    #[test]
+    fn ensure_commit_visible_scrolls_up() {
+        let mut app = App::new();
+        app.commit_selected = 2;
+        app.commit_scroll = 10;
+        app.ensure_commit_visible(20);
+        assert_eq!(app.commit_scroll, 2);
+    }
+
+    // ── Reset diff state ──
+
+    #[test]
+    fn reset_diff_state_restores_defaults() {
+        let mut app = App::new();
+        app.focus = Focus::Diff;
+        app.show_sidebar = false;
+        app.selected = 5;
+        app.selected_file = 3;
+        app.scroll = 42;
+        app.sidebar_scroll = 10;
+        app.collapsed.insert("src".to_string());
+        app.searching = true;
+        app.search_input = "query".to_string();
+        app.search = Some(SearchState {
+            query: "query".to_string(),
+            matches: vec![],
+            current: 0,
+        });
+
+        app.reset_diff_state();
+
+        assert!(matches!(app.focus, Focus::Sidebar));
+        assert!(app.show_sidebar);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected_file, 0);
+        assert_eq!(app.scroll, 0);
+        assert_eq!(app.sidebar_scroll, 0);
+        assert!(app.collapsed.is_empty());
+        assert!(!app.searching);
+        assert!(app.search_input.is_empty());
+        assert!(app.search.is_none());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
 
-use crate::app::{App, DiffViewMode, Focus};
+use crate::app::{App, DiffViewMode, Focus, Tab, ViewContext};
 use crate::config::ColorsConfig;
 use crate::model;
 use crate::split::{self, SplitRow, InlineSpan};
@@ -34,38 +34,47 @@ pub fn draw(
         frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
     }
 
-    if diff.files.is_empty() {
-        let message = Paragraph::new(format!("No changes found in {branch}."))
-            .style(Style::default().fg(colors.fg_muted))
-            .block(Block::default().borders(Borders::ALL).title(" nit "));
-        frame.render_widget(message, area);
-        return;
-    }
-
     let outer = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
     ]).split(area);
 
-    if app.show_sidebar {
-        let panels = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(SIDEBAR_WIDTH),
-                Constraint::Min(1),
-            ])
-            .split(outer[0]);
+    draw_tab_bar(frame, app, outer[0], colors);
 
-        draw_sidebar(frame, app, diff, visible, panels[0], colors);
-        draw_file_diff(frame, app, diff, panels[1], ss, theme, colors);
+    if diff.files.is_empty() && app.active_tab == Tab::Diff {
+        let message = Paragraph::new(format!("No changes found in {branch}."))
+            .style(Style::default().fg(colors.fg_muted))
+            .block(Block::default().borders(Borders::ALL).title(" nit "));
+        frame.render_widget(message, outer[1]);
     } else {
-        draw_file_diff(frame, app, diff, outer[0], ss, theme, colors);
+        match app.active_tab {
+            Tab::Diff => {
+                if app.show_sidebar {
+                    let panels = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Length(SIDEBAR_WIDTH),
+                            Constraint::Min(1),
+                        ])
+                        .split(outer[1]);
+
+                    draw_sidebar(frame, app, diff, visible, panels[0], colors);
+                    draw_file_diff(frame, app, diff, panels[1], ss, theme, colors);
+                } else {
+                    draw_file_diff(frame, app, diff, outer[1], ss, theme, colors);
+                }
+            }
+            Tab::Commits => {
+                draw_commit_list(frame, app, outer[1], colors);
+            }
+        }
     }
 
     if app.searching {
-        draw_search_input(frame, app, outer[1], colors);
+        draw_search_input(frame, app, outer[2], colors);
     } else {
-        draw_status_bar(frame, app, diff, branch, outer[1], colors);
+        draw_status_bar(frame, app, diff, branch, outer[2], colors);
     }
 }
 
@@ -399,6 +408,115 @@ fn highlight_search_in_spans(spans: Vec<Span<'_>>, app: &App, bg: Color) -> Vec<
     result
 }
 
+fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
+    let diff_label = match &app.view_context {
+        ViewContext::Default => "Diff".to_string(),
+        ViewContext::Commit { short_oid, .. } => format!("Diff ({})", short_oid),
+    };
+
+    let active_style = Style::default()
+        .fg(colors.fg_selected)
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default().fg(colors.fg_muted);
+    let sep_style = Style::default().fg(colors.fg_muted);
+
+    let diff_style = if app.active_tab == Tab::Diff {
+        active_style
+    } else {
+        inactive_style
+    };
+    let commits_style = if app.active_tab == Tab::Commits {
+        active_style
+    } else {
+        inactive_style
+    };
+
+    let key_style = Style::default().fg(colors.fg_muted);
+
+    let tabs = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("1 ", key_style),
+        Span::styled(diff_label, diff_style),
+        Span::styled(" │ ", sep_style),
+        Span::styled("2 ", key_style),
+        Span::styled("Commits", commits_style),
+    ]);
+
+    frame.render_widget(Paragraph::new(tabs), area);
+}
+
+fn draw_commit_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
+    if app.commits.is_empty() {
+        let message = Paragraph::new("No commits found.")
+            .style(Style::default().fg(colors.fg_muted))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(colors.border_focused))
+                    .title(" Commits "),
+            );
+        frame.render_widget(message, area);
+        return;
+    }
+
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    let lines: Vec<Line> = app
+        .commits
+        .iter()
+        .enumerate()
+        .map(|(i, commit)| {
+            let is_selected = i == app.commit_selected;
+            let marker = if is_selected { "▸ " } else { "  " };
+
+            // Reserve space: marker(2) + oid(7) + gap(2) + date(~15) + gap(2) + author(~15)
+            let meta = format!("{}  {}", commit.author, commit.date);
+            let meta_width = meta.len();
+            let prefix_width = 2 + 7 + 2; // marker + oid + gap
+            let msg_budget = inner_width
+                .saturating_sub(prefix_width)
+                .saturating_sub(meta_width + 2);
+
+            let msg: String = if commit.message.len() > msg_budget && msg_budget > 3 {
+                let truncated: String = commit.message.chars().take(msg_budget - 3).collect();
+                format!("{}...", truncated)
+            } else {
+                commit.message.clone()
+            };
+
+            let padding = msg_budget.saturating_sub(msg.len());
+
+            let msg_style = if is_selected {
+                Style::default().fg(colors.fg_selected)
+            } else {
+                Style::default().fg(colors.fg)
+            };
+
+            Line::from(vec![
+                Span::styled(marker, msg_style),
+                Span::styled(&commit.short_oid, Style::default().fg(colors.fg_accent)),
+                Span::raw("  "),
+                Span::styled(msg, msg_style),
+                Span::raw(" ".repeat(padding)),
+                Span::styled(&commit.author, Style::default().fg(colors.fg_info)),
+                Span::raw("  "),
+                Span::styled(&commit.date, Style::default().fg(colors.fg_muted)),
+            ])
+        })
+        .collect();
+
+    let commit_list = Paragraph::new(lines)
+        .scroll((app.commit_scroll as u16, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors.border_focused))
+                .title(" Commits "),
+        );
+
+    frame.render_widget(commit_list, area);
+}
+
 fn draw_search_input(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
     let input = Line::from(vec![
         Span::styled("/", Style::default().fg(colors.fg_accent)),
@@ -429,13 +547,24 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         crate::app::DiffViewMode::SideBySide => "s: unified",
     };
 
-    let hints = match app.focus {
-        Focus::Sidebar => format!(
-            "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  {mode_hint}  Tab: diff  q: quit"
-        ),
-        Focus::Diff => format!(
-            "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  {mode_hint}  h: sidebar  q: quit"
-        ),
+    let esc_hint = if matches!(app.view_context, ViewContext::Commit { .. }) {
+        "  Esc: back"
+    } else {
+        ""
+    };
+
+    let hints = match app.active_tab {
+        Tab::Commits => {
+            "j/k: navigate  Ctrl+d/u: page  Enter: view diff  gg/G: jump  1: diff  q: quit".to_string()
+        }
+        Tab::Diff => match app.focus {
+            Focus::Sidebar => format!(
+                "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  {mode_hint}  Tab: diff{esc_hint}  2: commits  q: quit"
+            ),
+            Focus::Diff => format!(
+                "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  {mode_hint}  h: sidebar{esc_hint}  2: commits  q: quit"
+            ),
+        },
     };
 
     let status = Line::from(vec![
