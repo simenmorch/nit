@@ -3,6 +3,53 @@ use std::collections::HashSet;
 use crate::model;
 use crate::tree::{FlatEntry, FlatEntryKind};
 
+pub const PR_FILTER_OPTIONS: &[&str] = &["open", "draft", "merged", "closed", "mine"];
+
+pub struct PrFilter {
+    pub enabled: HashSet<String>,
+    pub modal_open: bool,
+    pub modal_selected: usize,
+    pub github_user: Option<String>,
+}
+
+impl Default for PrFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PrFilter {
+    pub fn new() -> Self {
+        let mut enabled = HashSet::new();
+        enabled.insert("open".to_string());
+        Self {
+            enabled,
+            modal_open: false,
+            modal_selected: 0,
+            github_user: None,
+        }
+    }
+
+    pub fn toggle(&mut self, state: &str) {
+        if self.enabled.contains(state) {
+            self.enabled.remove(state);
+        } else {
+            self.enabled.insert(state.to_string());
+        }
+    }
+
+    pub fn matches(&self, pr: &model::PrInfo) -> bool {
+        let has_state_filters = self.enabled.iter().any(|s| s != "mine");
+        let state_match = !has_state_filters || self.enabled.contains(pr.state.as_str());
+        let mine_filter = if self.enabled.contains("mine") {
+            self.github_user.as_ref().is_some_and(|user| pr.author == *user)
+        } else {
+            true
+        };
+        state_match && mine_filter
+    }
+}
+
 pub enum Focus {
     Sidebar,
     Diff,
@@ -13,12 +60,14 @@ pub enum Tab {
     #[default]
     Diff,
     Commits,
+    PRs,
 }
 
 #[derive(Clone)]
 pub enum ViewContext {
     Default,
     Commit { short_oid: String, message: String, return_tab: Tab },
+    PullRequest { number: u64, title: String, return_tab: Tab },
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +105,10 @@ pub struct App {
     pub commits: Vec<model::CommitInfo>,
     pub commit_selected: usize,
     pub commit_scroll: usize,
+    pub prs: Vec<model::PrInfo>,
+    pub pr_selected: usize,
+    pub pr_scroll: usize,
+    pub pr_filter: PrFilter,
     pub view_context: ViewContext,
 }
 
@@ -84,8 +137,16 @@ impl App {
             commits: Vec::new(),
             commit_selected: 0,
             commit_scroll: 0,
+            prs: Vec::new(),
+            pr_selected: 0,
+            pr_scroll: 0,
+            pr_filter: PrFilter::new(),
             view_context: ViewContext::Default,
         }
+    }
+
+    pub fn filtered_prs(&self) -> Vec<&model::PrInfo> {
+        self.prs.iter().filter(|pr| self.pr_filter.matches(pr)).collect()
     }
 
     pub fn update_selected_file(&mut self, visible: &[FlatEntry]) {
@@ -491,6 +552,66 @@ impl App {
     pub fn jump_to_bottom_commits(&mut self) {
         if !self.commits.is_empty() {
             self.commit_selected = self.commits.len() - 1;
+        }
+    }
+
+    pub fn select_next_pr(&mut self) {
+        let count = self.filtered_prs().len();
+        if count > 0 && self.pr_selected < count - 1 {
+            self.pr_selected += 1;
+        }
+    }
+
+    pub fn select_prev_pr(&mut self) {
+        if self.pr_selected > 0 {
+            self.pr_selected -= 1;
+        }
+    }
+
+    pub fn ensure_pr_visible(&mut self, height: usize) {
+        let usable = height.saturating_sub(2);
+        if usable == 0 {
+            return;
+        }
+        if self.pr_selected < self.pr_scroll {
+            self.pr_scroll = self.pr_selected;
+        } else if self.pr_selected >= self.pr_scroll + usable {
+            self.pr_scroll = self.pr_selected - usable + 1;
+        }
+    }
+
+    pub fn scroll_prs_down_half_page(&mut self, viewport_height: usize) {
+        let half = viewport_height / 2;
+        let count = self.filtered_prs().len();
+        if count > 0 {
+            self.pr_selected = (self.pr_selected + half).min(count - 1);
+        }
+    }
+
+    pub fn scroll_prs_up_half_page(&mut self, viewport_height: usize) {
+        let half = viewport_height / 2;
+        self.pr_selected = self.pr_selected.saturating_sub(half);
+    }
+
+    pub fn jump_to_top_prs(&mut self) {
+        self.pr_selected = 0;
+        self.pr_scroll = 0;
+    }
+
+    pub fn jump_to_bottom_prs(&mut self) {
+        let count = self.filtered_prs().len();
+        if count > 0 {
+            self.pr_selected = count - 1;
+        }
+    }
+
+    pub fn clamp_pr_selection(&mut self) {
+        let count = self.filtered_prs().len();
+        if count == 0 {
+            self.pr_selected = 0;
+            self.pr_scroll = 0;
+        } else if self.pr_selected >= count {
+            self.pr_selected = count - 1;
         }
     }
 
@@ -1099,6 +1220,226 @@ mod tests {
         assert!(!app.searching);
         assert!(app.search_input.is_empty());
         assert!(app.search.is_none());
+    }
+
+    // ── PR filter ──
+
+    #[test]
+    fn pr_filter_default_has_open() {
+        let f = PrFilter::new();
+        assert!(f.enabled.contains("open"));
+        assert_eq!(f.enabled.len(), 1);
+    }
+
+    #[test]
+    fn pr_filter_toggle_on_off() {
+        let mut f = PrFilter::new();
+        f.toggle("closed");
+        assert!(f.enabled.contains("closed"));
+        f.toggle("closed");
+        assert!(!f.enabled.contains("closed"));
+    }
+
+    #[test]
+    fn pr_filter_matches_state() {
+        let f = PrFilter::new(); // only "open"
+        assert!(f.matches(&make_pr(1, "open", "alice")));
+        assert!(!f.matches(&make_pr(2, "closed", "alice")));
+    }
+
+    #[test]
+    fn pr_filter_matches_multiple_states() {
+        let mut f = PrFilter::new();
+        f.toggle("merged");
+        assert!(f.matches(&make_pr(1, "open", "a")));
+        assert!(f.matches(&make_pr(2, "merged", "a")));
+        assert!(!f.matches(&make_pr(3, "closed", "a")));
+    }
+
+    #[test]
+    fn pr_filter_mine_with_state() {
+        let mut f = PrFilter::new(); // "open"
+        f.toggle("mine");
+        f.github_user = Some("alice".to_string());
+        assert!(f.matches(&make_pr(1, "open", "alice")));
+        assert!(!f.matches(&make_pr(2, "open", "bob")));
+        assert!(!f.matches(&make_pr(3, "closed", "alice")));
+    }
+
+    #[test]
+    fn pr_filter_mine_alone_shows_all_states() {
+        let mut f = PrFilter::new();
+        f.toggle("open"); // remove default "open"
+        f.toggle("mine");
+        f.github_user = Some("alice".to_string());
+        // With only "mine" and no state filters, all of alice's PRs should match
+        assert!(f.matches(&make_pr(1, "open", "alice")));
+        assert!(f.matches(&make_pr(2, "closed", "alice")));
+        assert!(!f.matches(&make_pr(3, "open", "bob")));
+    }
+
+    #[test]
+    fn pr_filter_mine_without_github_user() {
+        let mut f = PrFilter::new();
+        f.toggle("mine");
+        // github_user is None — "mine" filter rejects everything
+        assert!(!f.matches(&make_pr(1, "open", "alice")));
+    }
+
+    #[test]
+    fn filtered_prs_respects_filter() {
+        let mut app = App::new();
+        app.prs = mixed_prs();
+        // Default filter is "open" — should match PRs #1, #5
+        let filtered = app.filtered_prs();
+        let numbers: Vec<u64> = filtered.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, vec![1, 5]);
+    }
+
+    #[test]
+    fn filtered_prs_mine_filter() {
+        let mut app = App::new();
+        app.prs = mixed_prs();
+        app.pr_filter.toggle("mine");
+        app.pr_filter.github_user = Some("alice".to_string());
+        // "open" + "mine" — only alice's open PRs
+        let filtered = app.filtered_prs();
+        let numbers: Vec<u64> = filtered.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, vec![1]);
+    }
+
+    #[test]
+    fn clamp_pr_selection_on_empty() {
+        let mut app = App::new();
+        app.prs = Vec::new();
+        app.pr_selected = 5;
+        app.pr_scroll = 3;
+        app.clamp_pr_selection();
+        assert_eq!(app.pr_selected, 0);
+        assert_eq!(app.pr_scroll, 0);
+    }
+
+    #[test]
+    fn clamp_pr_selection_past_end() {
+        let mut app = App::new();
+        app.prs = sample_prs(3);
+        app.pr_selected = 5;
+        app.clamp_pr_selection();
+        assert_eq!(app.pr_selected, 2);
+    }
+
+    #[test]
+    fn clamp_pr_selection_within_range() {
+        let mut app = App::new();
+        app.prs = sample_prs(5);
+        app.pr_selected = 2;
+        app.clamp_pr_selection();
+        assert_eq!(app.pr_selected, 2);
+    }
+
+    // ── PR navigation ──
+
+    fn sample_prs(n: usize) -> Vec<crate::model::PrInfo> {
+        (0..n)
+            .map(|i| crate::model::PrInfo {
+                number: i as u64 + 1,
+                title: format!("PR {}", i),
+                author: "Test".to_string(),
+                state: "open".to_string(),
+                updated_at: "just now".to_string(),
+            })
+            .collect()
+    }
+
+    fn make_pr(number: u64, state: &str, author: &str) -> crate::model::PrInfo {
+        crate::model::PrInfo {
+            number,
+            title: format!("PR #{}", number),
+            author: author.to_string(),
+            state: state.to_string(),
+            updated_at: "just now".to_string(),
+        }
+    }
+
+    fn mixed_prs() -> Vec<crate::model::PrInfo> {
+        vec![
+            make_pr(1, "open", "alice"),
+            make_pr(2, "closed", "bob"),
+            make_pr(3, "draft", "alice"),
+            make_pr(4, "merged", "carol"),
+            make_pr(5, "open", "bob"),
+        ]
+    }
+
+    #[test]
+    fn select_next_pr_advances() {
+        let mut app = App::new();
+        app.prs = sample_prs(5);
+        app.select_next_pr();
+        assert_eq!(app.pr_selected, 1);
+    }
+
+    #[test]
+    fn select_next_pr_stops_at_end() {
+        let mut app = App::new();
+        app.prs = sample_prs(3);
+        app.pr_selected = 2;
+        app.select_next_pr();
+        assert_eq!(app.pr_selected, 2);
+    }
+
+    #[test]
+    fn select_prev_pr_decrements() {
+        let mut app = App::new();
+        app.prs = sample_prs(5);
+        app.pr_selected = 3;
+        app.select_prev_pr();
+        assert_eq!(app.pr_selected, 2);
+    }
+
+    #[test]
+    fn select_prev_pr_stops_at_zero() {
+        let mut app = App::new();
+        app.prs = sample_prs(5);
+        app.select_prev_pr();
+        assert_eq!(app.pr_selected, 0);
+    }
+
+    #[test]
+    fn jump_to_top_prs_resets() {
+        let mut app = App::new();
+        app.prs = sample_prs(10);
+        app.pr_selected = 7;
+        app.pr_scroll = 5;
+        app.jump_to_top_prs();
+        assert_eq!(app.pr_selected, 0);
+        assert_eq!(app.pr_scroll, 0);
+    }
+
+    #[test]
+    fn jump_to_bottom_prs_goes_to_last() {
+        let mut app = App::new();
+        app.prs = sample_prs(10);
+        app.jump_to_bottom_prs();
+        assert_eq!(app.pr_selected, 9);
+    }
+
+    #[test]
+    fn ensure_pr_visible_scrolls_down() {
+        let mut app = App::new();
+        app.pr_selected = 25;
+        app.pr_scroll = 0;
+        app.ensure_pr_visible(20);
+        assert!(app.pr_scroll > 0);
+    }
+
+    #[test]
+    fn ensure_pr_visible_scrolls_up() {
+        let mut app = App::new();
+        app.pr_selected = 2;
+        app.pr_scroll = 10;
+        app.ensure_pr_visible(20);
+        assert_eq!(app.pr_scroll, 2);
     }
 
     #[test]

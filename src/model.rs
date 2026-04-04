@@ -50,3 +50,12 @@ pub struct CommitInfo {
     pub author: String,
     pub date: String,
 }
+
+#[derive(Debug)]
+pub struct PrInfo {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub state: String,
+    pub updated_at: String,
+}

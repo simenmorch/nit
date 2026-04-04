@@ -1,9 +1,12 @@
 use std::process::Command;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use octocrab::models::pulls::Comment as OctoComment;
+use octocrab::models::pulls::PullRequest;
 use octocrab::models::repos::{DiffEntry, DiffEntryStatus};
 use octocrab::models::IssueState;
+use octocrab::params;
 use octocrab::Octocrab;
 use tokio::runtime::Runtime;
 
@@ -62,6 +65,70 @@ fn resolve_token() -> Result<String> {
 }
 
 impl ReviewProvider for GitHubProvider {
+    fn fetch_authenticated_user(&self) -> Result<String> {
+        self.rt.block_on(async {
+            let user = self.client.current().user().await.context("failed to fetch authenticated user")?;
+            Ok(user.login)
+        })
+    }
+
+    fn fetch_pr_list(&self, limit: usize) -> Result<Vec<model::PrInfo>> {
+        let pages: Vec<PullRequest> = self.rt.block_on(async {
+            let page = self.client
+                .pulls(&self.owner, &self.repo)
+                .list()
+                .state(params::State::All)
+                .sort(params::pulls::Sort::Updated)
+                .direction(params::Direction::Descending)
+                .per_page(limit.min(100) as u8)
+                .send()
+                .await
+                .context("failed to fetch pull requests")?;
+            Ok::<_, anyhow::Error>(page.items)
+        })?;
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let prs = pages
+            .into_iter()
+            .take(limit)
+            .map(|pr| {
+                let state = if pr.draft == Some(true) {
+                    "draft"
+                } else if pr.merged_at.is_some() {
+                    "merged"
+                } else {
+                    match pr.state {
+                        Some(IssueState::Closed) => "closed",
+                        _ => "open",
+                    }
+                }
+                .to_string();
+
+                let updated_at = pr
+                    .updated_at
+                    .map(|dt| {
+                        let secs = dt.timestamp();
+                        crate::git::format_relative_time(now - secs)
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                model::PrInfo {
+                    number: pr.number,
+                    title: pr.title.unwrap_or_default(),
+                    author: pr.user.map(|u| u.login).unwrap_or_else(|| "unknown".into()),
+                    state,
+                    updated_at,
+                }
+            })
+            .collect();
+
+        Ok(prs)
+    }
+
     fn fetch_diff(&self, pr_id: &str) -> Result<model::Diff> {
         let pr_number: u64 = pr_id.parse().context("PR id must be a number")?;
 

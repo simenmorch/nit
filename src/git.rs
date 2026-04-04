@@ -194,7 +194,7 @@ pub fn get_commit_log(repo: &Repository, limit: usize) -> Result<Vec<model::Comm
     Ok(commits)
 }
 
-fn format_relative_time(seconds_ago: i64) -> String {
+pub fn format_relative_time(seconds_ago: i64) -> String {
     const MINUTE: i64 = 60;
     const TWO_MINUTES: i64 = 2 * MINUTE;
     const HOUR: i64 = 60 * MINUTE;

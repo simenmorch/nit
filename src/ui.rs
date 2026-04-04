@@ -68,6 +68,9 @@ pub fn draw(
             Tab::Commits => {
                 draw_commit_list(frame, app, outer[1], colors);
             }
+            Tab::PRs => {
+                draw_pr_list(frame, app, outer[1], colors);
+            }
         }
     }
 
@@ -412,6 +415,7 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig)
     let diff_label = match &app.view_context {
         ViewContext::Default => "Diff".to_string(),
         ViewContext::Commit { short_oid, .. } => format!("Diff ({})", short_oid),
+        ViewContext::PullRequest { number, .. } => format!("Diff (#{})", number),
     };
 
     let active_style = Style::default()
@@ -430,6 +434,11 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig)
     } else {
         inactive_style
     };
+    let prs_style = if app.active_tab == Tab::PRs {
+        active_style
+    } else {
+        inactive_style
+    };
 
     let key_style = Style::default().fg(colors.fg_muted);
 
@@ -440,6 +449,9 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig)
         Span::styled(" │ ", sep_style),
         Span::styled("2 ", key_style),
         Span::styled("Commits", commits_style),
+        Span::styled(" │ ", sep_style),
+        Span::styled("3 ", key_style),
+        Span::styled("PRs", prs_style),
     ]);
 
     frame.render_widget(Paragraph::new(tabs), area);
@@ -517,6 +529,167 @@ fn draw_commit_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCon
     frame.render_widget(commit_list, area);
 }
 
+fn draw_pr_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
+    let filtered: Vec<&crate::model::PrInfo> = app.filtered_prs();
+
+    // Build active filter label for the title
+    let active_filters: Vec<&str> = crate::app::PR_FILTER_OPTIONS
+        .iter()
+        .filter(|s| app.pr_filter.enabled.contains(**s))
+        .copied()
+        .collect();
+    let filter_label = if active_filters.is_empty() {
+        " Pull Requests (no filter) ".to_string()
+    } else {
+        format!(" Pull Requests ({}) ", active_filters.join(", "))
+    };
+
+    if filtered.is_empty() {
+        let msg = if app.prs.is_empty() {
+            "No pull requests found."
+        } else {
+            "No pull requests match the current filter."
+        };
+        let message = Paragraph::new(msg)
+            .style(Style::default().fg(colors.fg_muted))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(colors.border_focused))
+                    .title(filter_label),
+            );
+        frame.render_widget(message, area);
+
+        if app.pr_filter.modal_open {
+            draw_pr_filter_modal(frame, app, area, colors);
+        }
+        return;
+    }
+
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    let lines: Vec<Line> = filtered
+        .iter()
+        .enumerate()
+        .map(|(i, pr)| {
+            let is_selected = i == app.pr_selected;
+            let marker = if is_selected { "▸ " } else { "  " };
+
+            let number_str = format!("#{}", pr.number);
+            let state_badge = &pr.state;
+
+            let meta = format!("{}  {}  {}", pr.author, state_badge, pr.updated_at);
+            let meta_width = meta.len();
+            let prefix_width = 2 + number_str.len() + 2;
+            let title_budget = inner_width
+                .saturating_sub(prefix_width)
+                .saturating_sub(meta_width + 2);
+
+            let title_chars = pr.title.chars().count();
+            let title: String = if title_chars > title_budget && title_budget > 3 {
+                let truncated: String = pr.title.chars().take(title_budget - 3).collect();
+                format!("{}...", truncated)
+            } else {
+                pr.title.clone()
+            };
+
+            let padding = title_budget.saturating_sub(title.chars().count());
+
+            let title_style = if is_selected {
+                Style::default().fg(colors.fg_selected)
+            } else {
+                Style::default().fg(colors.fg)
+            };
+
+            let state_color = match pr.state.as_str() {
+                "open" => colors.fg_added,
+                "draft" => colors.fg_muted,
+                _ => colors.fg_muted,
+            };
+
+            Line::from(vec![
+                Span::styled(marker, title_style),
+                Span::styled(number_str, Style::default().fg(colors.fg_accent)),
+                Span::raw("  "),
+                Span::styled(title, title_style),
+                Span::raw(" ".repeat(padding)),
+                Span::styled(&pr.author, Style::default().fg(colors.fg_info)),
+                Span::raw("  "),
+                Span::styled(state_badge, Style::default().fg(state_color)),
+                Span::raw("  "),
+                Span::styled(&pr.updated_at, Style::default().fg(colors.fg_muted)),
+            ])
+        })
+        .collect();
+
+    let pr_list = Paragraph::new(lines)
+        .scroll((app.pr_scroll as u16, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors.border_focused))
+                .title(filter_label),
+        );
+
+    frame.render_widget(pr_list, area);
+
+    if app.pr_filter.modal_open {
+        draw_pr_filter_modal(frame, app, area, colors);
+    }
+}
+
+fn draw_pr_filter_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
+    let options = crate::app::PR_FILTER_OPTIONS;
+    let modal_height = options.len() as u16 + 2; // borders
+    let modal_width: u16 = 22;
+
+    // Position in top-right of the PR list area
+    let x = area.x + area.width.saturating_sub(modal_width + 2);
+    let y = area.y + 1;
+
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    // Clear background
+    let clear = Block::default().style(Style::default().bg(colors.bg.unwrap_or(Color::Black)));
+    frame.render_widget(clear, modal_area);
+
+    let lines: Vec<Line> = options
+        .iter()
+        .enumerate()
+        .map(|(i, &opt)| {
+            let is_selected = i == app.pr_filter.modal_selected;
+            let is_enabled = app.pr_filter.enabled.contains(opt);
+
+            let check = if is_enabled { "[x] " } else { "[ ] " };
+            let marker = if is_selected { "▸ " } else { "  " };
+
+            let style = if is_selected {
+                Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
+            } else if is_enabled {
+                Style::default().fg(colors.fg)
+            } else {
+                Style::default().fg(colors.fg_muted)
+            };
+
+            Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(check, style),
+                Span::styled(opt, style),
+            ])
+        })
+        .collect();
+
+    let modal = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(colors.border_focused))
+            .title(" Filter ")
+            .style(Style::default().bg(colors.bg.unwrap_or(Color::Black))),
+    );
+
+    frame.render_widget(modal, modal_area);
+}
+
 fn draw_search_input(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
     let input = Line::from(vec![
         Span::styled("/", Style::default().fg(colors.fg_accent)),
@@ -547,7 +720,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         crate::app::DiffViewMode::SideBySide => "s: unified",
     };
 
-    let esc_hint = if matches!(app.view_context, ViewContext::Commit { .. }) {
+    let esc_hint = if matches!(app.view_context, ViewContext::Commit { .. } | ViewContext::PullRequest { .. }) {
         "  Esc: back"
     } else {
         ""
@@ -555,14 +728,17 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
 
     let hints = match app.active_tab {
         Tab::Commits => {
-            "j/k: navigate  Ctrl+d/u: page  Enter: view diff  gg/G: jump  1: diff  q: quit".to_string()
+            "j/k: navigate  Ctrl+d/u: page  Enter: view diff  gg/G: jump  1: diff  3: prs  q: quit".to_string()
+        }
+        Tab::PRs => {
+            "j/k: navigate  Ctrl+d/u: page  Enter: view diff  f: filter  gg/G: jump  1: diff  2: commits  q: quit".to_string()
         }
         Tab::Diff => match app.focus {
             Focus::Sidebar => format!(
-                "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  {mode_hint}  Tab: diff{esc_hint}  2: commits  q: quit"
+                "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  {mode_hint}  Tab: diff{esc_hint}  2: commits  3: prs  q: quit"
             ),
             Focus::Diff => format!(
-                "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  {mode_hint}  h: sidebar{esc_hint}  2: commits  q: quit"
+                "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  {mode_hint}  h: sidebar{esc_hint}  2: commits  3: prs  q: quit"
             ),
         },
     };
