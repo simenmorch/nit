@@ -24,7 +24,13 @@ fn main() -> Result<()> {
 
     let (diff, label) = match cli.rev.as_deref() {
         None => {
-            let diff = git::get_uncommitted_diff(&repo)?;
+            let mut diff = git::get_uncommitted_diff(&repo)?;
+            let staged = git::get_staged_files(&repo).unwrap_or_default();
+            for file in &mut diff.files {
+                if staged.contains(&file.path) {
+                    file.viewed = true;
+                }
+            }
             let branch = git::branch_name(&repo);
             (diff, branch)
         }
@@ -103,6 +109,7 @@ fn main() -> Result<()> {
 enum KeyAction {
     Continue,
     Quit,
+    Commit(String),
     LoadCommitDiff(String),
     LoadPrDiff(u64),
     ReturnToDefault,
@@ -127,6 +134,79 @@ fn handle_key(
             }
             KeyCode::Char(c) => app.search_input.push(c),
             _ => {}
+        }
+        return KeyAction::Continue;
+    }
+
+    // Commit message modal
+    if app.committing {
+        // Ctrl+Enter submits from either field
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            if !app.commit_summary.is_empty() {
+                let msg = app.commit_message();
+                app.committing = false;
+                return KeyAction::Commit(msg);
+            }
+            return KeyAction::Continue;
+        }
+
+        match app.commit_focus {
+            app::CommitField::Summary => match key.code {
+                KeyCode::Enter => {
+                    let msg = app.commit_message();
+                    if !app.commit_summary.is_empty() {
+                        app.committing = false;
+                        return KeyAction::Commit(msg);
+                    }
+                }
+                KeyCode::Esc => app.cancel_commit(),
+                KeyCode::Tab => {
+                    app.commit_focus = app::CommitField::Description;
+                    app.commit_cursor = 0;
+                }
+                KeyCode::Backspace => {
+                    app.commit_summary.pop();
+                }
+                KeyCode::Char(c) => app.commit_summary.push(c),
+                _ => {}
+            },
+            app::CommitField::Description => match key.code {
+                KeyCode::Enter => {
+                    // Insert a new line after the cursor row
+                    let row = app.commit_cursor;
+                    app.commit_description.insert(row + 1, String::new());
+                    app.commit_cursor += 1;
+                }
+                KeyCode::Esc => app.cancel_commit(),
+                KeyCode::Tab => {
+                    app.commit_focus = app::CommitField::Summary;
+                }
+                KeyCode::Backspace => {
+                    let row = app.commit_cursor;
+                    if app.commit_description[row].is_empty() {
+                        if row > 0 {
+                            app.commit_description.remove(row);
+                            app.commit_cursor -= 1;
+                        }
+                    } else {
+                        app.commit_description[row].pop();
+                    }
+                }
+                KeyCode::Up => {
+                    if app.commit_cursor > 0 {
+                        app.commit_cursor -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if app.commit_cursor + 1 < app.commit_description.len() {
+                        app.commit_cursor += 1;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    app.commit_description[app.commit_cursor].push(c);
+                }
+                _ => {}
+            },
         }
         return KeyAction::Continue;
     }
@@ -263,6 +343,10 @@ fn handle_diff_tab_key(
         }
         KeyCode::Char('s') => {
             app.toggle_view_mode();
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('c') if matches!(app.view_context, app::ViewContext::Default) => {
+            app.start_commit();
             return KeyAction::Continue;
         }
         _ => {}
@@ -457,6 +541,14 @@ fn run(
                     && !diff_content_eq(&diff, &new_diff)
                 {
                     transfer_viewed(&diff, &mut new_diff);
+                    // Mark staged files as viewed (unless already transferred)
+                    if let Ok(staged) = git::get_staged_files(repo) {
+                        for file in &mut new_diff.files {
+                            if !file.viewed && staged.contains(&file.path) {
+                                file.viewed = true;
+                            }
+                        }
+                    }
                     diff = new_diff;
                     tree = tree::FileTree::from_files(&diff.files);
                     original_diff = diff.clone();
@@ -478,6 +570,19 @@ fn run(
                     repo,
                 ) {
                     KeyAction::Quit => return Ok(()),
+                    KeyAction::Commit(msg) => {
+                        if let Err(_e) = git::create_commit(repo, &msg) {
+                            // Commit failed — stay as-is, live reload will show current state
+                        }
+                        // Refresh diff immediately after commit
+                        if let Ok(new_diff) = git::get_uncommitted_diff(repo) {
+                            diff = new_diff;
+                            tree = tree::FileTree::from_files(&diff.files);
+                            original_diff = diff.clone();
+                            app.reset_diff_state();
+                        }
+                        break;
+                    }
                     KeyAction::LoadCommitDiff(oid) => {
                         let commit_info = app
                             .commits

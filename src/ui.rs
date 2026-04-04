@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
@@ -72,6 +72,10 @@ pub fn draw(
                 draw_pr_list(frame, app, outer[1], colors);
             }
         }
+    }
+
+    if app.committing {
+        draw_commit_modal(frame, app, area, colors);
     }
 
     if app.searching {
@@ -688,6 +692,88 @@ fn draw_pr_filter_modal(frame: &mut Frame, app: &App, area: Rect, colors: &Color
     );
 
     frame.render_widget(modal, modal_area);
+}
+
+fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
+    use crate::app::CommitField;
+
+    let modal_width = area.width.saturating_sub(4).min(100);
+    let summary_height: u16 = 3; // border + 1 line + border
+    let desc_height = area.height.saturating_sub(summary_height + 4).clamp(5, 15);
+    let modal_height = summary_height + desc_height;
+
+    let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+
+    let summary_area = Rect::new(x, y, modal_width, summary_height);
+    let desc_area = Rect::new(x, y + summary_height, modal_width, desc_height);
+
+    let bg = colors.bg.unwrap_or(Color::Black);
+    let focused_border = Style::default().fg(colors.border_focused);
+    let unfocused_border = Style::default().fg(colors.border_unfocused);
+
+    // Summary field
+    let summary_border = if app.commit_focus == CommitField::Summary {
+        focused_border
+    } else {
+        unfocused_border
+    };
+    let summary_content = if app.commit_focus == CommitField::Summary {
+        Line::from(vec![
+            Span::styled(&app.commit_summary, Style::default().fg(colors.fg)),
+            Span::styled("█", Style::default().fg(colors.fg_muted)),
+        ])
+    } else {
+        Line::from(Span::styled(&app.commit_summary, Style::default().fg(colors.fg)))
+    };
+    let summary = Paragraph::new(summary_content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(summary_border)
+            .title(" Commit summary ")
+            .style(Style::default().bg(bg)),
+    );
+
+    // Description field
+    let desc_border = if app.commit_focus == CommitField::Description {
+        focused_border
+    } else {
+        unfocused_border
+    };
+    let desc_lines: Vec<Line> = app
+        .commit_description
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            if app.commit_focus == CommitField::Description && i == app.commit_cursor {
+                Line::from(vec![
+                    Span::styled(line.as_str(), Style::default().fg(colors.fg)),
+                    Span::styled("█", Style::default().fg(colors.fg_muted)),
+                ])
+            } else {
+                Line::from(Span::styled(line.as_str(), Style::default().fg(colors.fg)))
+            }
+        })
+        .collect();
+    let desc_title = " Commit description ";
+    let desc = Paragraph::new(desc_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(desc_border)
+            .title(desc_title)
+            .style(Style::default().bg(bg)),
+    );
+
+    // Clear the cells behind the modal, then fill with background
+    let full_modal_area = Rect::new(x, y, modal_width, modal_height);
+    frame.render_widget(Clear, full_modal_area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(bg)),
+        full_modal_area,
+    );
+
+    frame.render_widget(summary, summary_area);
+    frame.render_widget(desc, desc_area);
 }
 
 fn draw_search_input(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {

@@ -23,6 +23,37 @@ pub fn stage_file(repo: &Repository, path: &str, deleted: bool) -> Result<()> {
     Ok(())
 }
 
+/// Create a commit from the current index (staged changes) with the given message.
+pub fn create_commit(repo: &Repository, message: &str) -> Result<()> {
+    let mut index = repo.index().context("failed to open index")?;
+    let tree_id = index.write_tree().context("failed to write tree")?;
+    let tree = repo.find_tree(tree_id).context("failed to find tree")?;
+    let sig = repo.signature().context("failed to get signature")?;
+
+    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+        .context("failed to create commit")?;
+    Ok(())
+}
+
+/// Return the set of file paths that are currently staged (in the index but
+/// different from HEAD).
+pub fn get_staged_files(repo: &Repository) -> Result<std::collections::HashSet<String>> {
+    let tree = head_tree(repo)?;
+    let diff = repo
+        .diff_tree_to_index(tree.as_ref(), None, None)
+        .context("failed to compute staged diff")?;
+    let mut paths = std::collections::HashSet::new();
+    for delta in diff.deltas() {
+        if let Some(p) = delta.new_file().path().or(delta.old_file().path()) {
+            paths.insert(p.to_string_lossy().into_owned());
+        }
+    }
+    Ok(paths)
+}
+
 /// Parse owner/repo from the origin remote URL.
 /// Supports SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
 pub fn owner_repo_from_remote(repo: &Repository) -> Result<(String, String)> {

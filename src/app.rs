@@ -77,6 +77,13 @@ pub enum DiffViewMode {
     SideBySide,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum CommitField {
+    #[default]
+    Summary,
+    Description,
+}
+
 pub struct SearchState {
     pub query: String,
     pub matches: Vec<SearchMatch>,
@@ -101,6 +108,11 @@ pub struct App {
     pub searching: bool,
     pub search_input: String,
     pub search: Option<SearchState>,
+    pub committing: bool,
+    pub commit_summary: String,
+    pub commit_description: Vec<String>,
+    pub commit_focus: CommitField,
+    pub commit_cursor: usize,
     pub active_tab: Tab,
     pub commits: Vec<model::CommitInfo>,
     pub commit_selected: usize,
@@ -133,6 +145,11 @@ impl App {
             searching: false,
             search_input: String::new(),
             search: None,
+            committing: false,
+            commit_summary: String::new(),
+            commit_description: vec![String::new()],
+            commit_focus: CommitField::default(),
+            commit_cursor: 0,
             active_tab: Tab::default(),
             commits: Vec::new(),
             commit_selected: 0,
@@ -384,6 +401,28 @@ impl App {
     pub fn cancel_search(&mut self) {
         self.searching = false;
         self.search_input.clear();
+    }
+
+    pub fn start_commit(&mut self) {
+        self.committing = true;
+        self.commit_summary.clear();
+        self.commit_description = vec![String::new()];
+        self.commit_focus = CommitField::Summary;
+        self.commit_cursor = 0;
+    }
+
+    pub fn cancel_commit(&mut self) {
+        self.committing = false;
+    }
+
+    /// Build the full commit message from summary + description.
+    pub fn commit_message(&self) -> String {
+        let desc = self.commit_description.join("\n").trim().to_string();
+        if desc.is_empty() {
+            self.commit_summary.clone()
+        } else {
+            format!("{}\n\n{}", self.commit_summary, desc)
+        }
     }
 
     pub fn clear_search(&mut self) {
