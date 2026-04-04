@@ -218,15 +218,22 @@ impl App {
         }
     }
 
+    /// Toggle viewed state for the selected entry. Returns indices of files
+    /// that were newly marked as viewed (for staging purposes).
     pub fn toggle_viewed_entry(
         &mut self,
         diff: &mut crate::model::Diff,
         visible: &[FlatEntry],
-    ) {
+    ) -> Vec<usize> {
+        let mut newly_viewed = Vec::new();
         if let Some(entry) = visible.get(self.selected) {
             match &entry.kind {
                 FlatEntryKind::File { file_index, .. } => {
-                    diff.files[*file_index].viewed = !diff.files[*file_index].viewed;
+                    let was_viewed = diff.files[*file_index].viewed;
+                    diff.files[*file_index].viewed = !was_viewed;
+                    if !was_viewed {
+                        newly_viewed.push(*file_index);
+                    }
                 }
                 FlatEntryKind::Folder { path, .. } => {
                     let prefix = format!("{}/", path);
@@ -236,22 +243,29 @@ impl App {
                         .filter(|f| f.path.starts_with(&prefix))
                         .all(|f| f.viewed);
                     let new_viewed = !all_viewed;
-                    for file in diff.files.iter_mut() {
+                    for (i, file) in diff.files.iter_mut().enumerate() {
                         if file.path.starts_with(&prefix) {
                             file.viewed = new_viewed;
+                            if new_viewed {
+                                newly_viewed.push(i);
+                            }
                         }
                     }
                 }
             }
         }
+        newly_viewed
     }
 
+    /// Mark the current file as viewed and advance to the next file.
+    /// Returns the index of the file that was marked as viewed.
     pub fn mark_viewed_and_next(
         &mut self,
         diff: &mut crate::model::Diff,
         visible: &[FlatEntry],
-    ) {
-        diff.files[self.selected_file].viewed = true;
+    ) -> usize {
+        let marked = self.selected_file;
+        diff.files[marked].viewed = true;
 
         // Find the next file entry after the current sidebar selection
         for (i, entry) in visible.iter().enumerate().skip(self.selected + 1) {
@@ -259,9 +273,10 @@ impl App {
                 self.selected = i;
                 self.selected_file = *file_index;
                 self.scroll = 0;
-                return;
+                return marked;
             }
         }
+        marked
     }
 
     pub fn scroll_down(&mut self, content_height: usize, viewport_height: usize) {

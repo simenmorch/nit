@@ -115,6 +115,7 @@ fn handle_key(
     visible: &[tree::FlatEntry],
     content_height: usize,
     viewport_height: usize,
+    repo: &git2::Repository,
 ) -> KeyAction {
     // Search input mode — capture keystrokes for the query
     if app.searching {
@@ -183,7 +184,7 @@ fn handle_key(
     // Tab-specific dispatch
     match app.active_tab {
         app::Tab::Diff => {
-            handle_diff_tab_key(key, app, diff, visible, content_height, viewport_height)
+            handle_diff_tab_key(key, app, diff, visible, content_height, viewport_height, repo)
         }
         app::Tab::Commits => handle_commits_tab_key(key, app, viewport_height),
         app::Tab::PRs => handle_prs_tab_key(key, app, viewport_height),
@@ -197,6 +198,7 @@ fn handle_diff_tab_key(
     visible: &[tree::FlatEntry],
     content_height: usize,
     viewport_height: usize,
+    repo: &git2::Repository,
 ) -> KeyAction {
     // Ctrl-modified keys
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -228,11 +230,23 @@ fn handle_diff_tab_key(
             return KeyAction::Continue;
         }
         KeyCode::Char('v') => {
-            app.toggle_viewed_entry(diff, visible);
+            let newly_viewed = app.toggle_viewed_entry(diff, visible);
+            if matches!(app.view_context, app::ViewContext::Default) {
+                for idx in newly_viewed {
+                    let file = &diff.files[idx];
+                    let deleted = matches!(file.status, model::FileStatus::Deleted);
+                    let _ = git::stage_file(repo, &file.path, deleted);
+                }
+            }
             return KeyAction::Continue;
         }
         KeyCode::Char('V') => {
-            app.mark_viewed_and_next(diff, visible);
+            let idx = app.mark_viewed_and_next(diff, visible);
+            if matches!(app.view_context, app::ViewContext::Default) {
+                let file = &diff.files[idx];
+                let deleted = matches!(file.status, model::FileStatus::Deleted);
+                let _ = git::stage_file(repo, &file.path, deleted);
+            }
             return KeyAction::Continue;
         }
         KeyCode::Char('/') => {
@@ -461,6 +475,7 @@ fn run(
                     &visible,
                     content_height,
                     viewport_height,
+                    repo,
                 ) {
                     KeyAction::Quit => return Ok(()),
                     KeyAction::LoadCommitDiff(oid) => {

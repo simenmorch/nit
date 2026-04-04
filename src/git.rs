@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -8,6 +9,18 @@ use crate::model;
 /// Open the git repository that contains the current directory.
 pub fn open_repo() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent)")
+}
+
+/// Stage a file in the git index. For deleted files, removes the entry.
+pub fn stage_file(repo: &Repository, path: &str, deleted: bool) -> Result<()> {
+    let mut index = repo.index().context("failed to open index")?;
+    if deleted {
+        index.remove_path(Path::new(path)).context("failed to remove path from index")?;
+    } else {
+        index.add_path(Path::new(path)).context("failed to add path to index")?;
+    }
+    index.write().context("failed to write index")?;
+    Ok(())
 }
 
 /// Parse owner/repo from the origin remote URL.
