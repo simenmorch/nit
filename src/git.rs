@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use git2::{Delta, DiffOptions, Repository, Sort};
+use git2::{BranchType, Delta, DiffOptions, Repository, Sort};
 
 use crate::model;
 
@@ -52,6 +52,44 @@ pub fn get_staged_files(repo: &Repository) -> Result<std::collections::HashSet<S
         }
     }
     Ok(paths)
+}
+
+/// List local branch names, with the current branch first.
+pub fn list_branches(repo: &Repository) -> Result<Vec<String>> {
+    let iter = repo
+        .branches(Some(BranchType::Local))
+        .context("failed to list branches")?;
+    let mut current = Vec::new();
+    let mut others = Vec::new();
+    for branch_result in iter {
+        let (branch, _) = branch_result.context("failed to read branch")?;
+        if let Ok(Some(name)) = branch.name() {
+            if branch.is_head() {
+                current.push(name.to_string());
+            } else {
+                others.push(name.to_string());
+            }
+        }
+    }
+    others.sort();
+    current.append(&mut others);
+    Ok(current)
+}
+
+/// Check out a local branch by name.
+pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
+    let refname = format!("refs/heads/{}", branch_name);
+    let obj = repo
+        .revparse_single(&refname)
+        .with_context(|| format!("could not resolve branch '{}'", branch_name))?;
+
+    repo.checkout_tree(&obj, Some(git2::build::CheckoutBuilder::new().safe()))
+        .with_context(|| format!("failed to checkout tree for '{}'", branch_name))?;
+
+    repo.set_head(&refname)
+        .with_context(|| format!("failed to set HEAD to '{}'", branch_name))?;
+
+    Ok(())
 }
 
 /// Parse owner/repo from the origin remote URL.

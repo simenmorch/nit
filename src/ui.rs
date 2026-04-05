@@ -78,6 +78,10 @@ pub fn draw(
         draw_commit_modal(frame, app, area, colors);
     }
 
+    if app.branch_modal.open {
+        draw_branch_modal(frame, app, area, colors);
+    }
+
     if app.searching {
         draw_search_input(frame, app, outer[2], colors);
     } else {
@@ -689,6 +693,70 @@ fn draw_pr_filter_modal(frame: &mut Frame, app: &App, area: Rect, colors: &Color
             .border_style(Style::default().fg(colors.border_focused))
             .title(" Filter ")
             .style(Style::default().bg(colors.bg.unwrap_or(Color::Black))),
+    );
+
+    frame.render_widget(modal, modal_area);
+}
+
+fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
+    let branches = &app.branch_modal.branches;
+    if branches.is_empty() {
+        return;
+    }
+
+    let max_name = branches.iter().map(|b| b.len()).max().unwrap_or(0);
+    let modal_width = (max_name as u16 + 8).clamp(20, area.width.saturating_sub(4)); // marker + padding + "* "
+    let modal_height = (branches.len() as u16 + 2).min(area.height.saturating_sub(2)); // +2 for borders
+    let visible_rows = (modal_height - 2) as usize;
+
+    let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let bg = colors.bg.unwrap_or(Color::Black);
+
+    // Scroll so the selected item is visible
+    let scroll_offset = if app.branch_modal.selected >= visible_rows {
+        app.branch_modal.selected - visible_rows + 1
+    } else {
+        0
+    };
+
+    let lines: Vec<Line> = branches
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(visible_rows)
+        .map(|(i, name)| {
+            let is_selected = i == app.branch_modal.selected;
+            let is_current = *name == app.branch_modal.current;
+
+            let marker = if is_selected { "▸ " } else { "  " };
+            let prefix = if is_current { "* " } else { "  " };
+
+            let style = if is_selected {
+                Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
+            } else if is_current {
+                Style::default().fg(colors.fg_info)
+            } else {
+                Style::default().fg(colors.fg)
+            };
+
+            Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(prefix, style),
+                Span::styled(name.as_str(), style),
+            ])
+        })
+        .collect();
+
+    frame.render_widget(Clear, modal_area);
+    let modal = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(colors.border_focused))
+            .title(" Branches ")
+            .style(Style::default().bg(bg)),
     );
 
     frame.render_widget(modal, modal_area);

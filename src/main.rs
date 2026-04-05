@@ -110,6 +110,7 @@ enum KeyAction {
     Continue,
     Quit,
     Commit(String),
+    CheckoutBranch(String),
     LoadCommitDiff(String),
     LoadPrDiff(u64),
     ReturnToDefault,
@@ -207,6 +208,42 @@ fn handle_key(
                 }
                 _ => {}
             },
+        }
+        return KeyAction::Continue;
+    }
+
+    // Branch modal intercepts all keys
+    if app.branch_modal.open {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let len = app.branch_modal.branches.len();
+                if len > 0 {
+                    app.branch_modal.selected = (app.branch_modal.selected + 1) % len;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let len = app.branch_modal.branches.len();
+                if len > 0 {
+                    if app.branch_modal.selected == 0 {
+                        app.branch_modal.selected = len - 1;
+                    } else {
+                        app.branch_modal.selected -= 1;
+                    }
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(branch) = app.branch_modal.branches.get(app.branch_modal.selected) {
+                    let name = branch.clone();
+                    app.branch_modal.open = false;
+                    if name != app.branch_modal.current {
+                        return KeyAction::CheckoutBranch(name);
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('b') => {
+                app.branch_modal.open = false;
+            }
+            _ => {}
         }
         return KeyAction::Continue;
     }
@@ -347,6 +384,17 @@ fn handle_diff_tab_key(
         }
         KeyCode::Char('c') if matches!(app.view_context, app::ViewContext::Default) => {
             app.start_commit();
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('b') if matches!(app.view_context, app::ViewContext::Default) => {
+            if let Ok(branches) = git::list_branches(repo) {
+                let current = git::branch_name(repo);
+                let selected = branches.iter().position(|b| b == &current).unwrap_or(0);
+                app.branch_modal.branches = branches;
+                app.branch_modal.current = current;
+                app.branch_modal.selected = selected;
+                app.branch_modal.open = true;
+            }
             return KeyAction::Continue;
         }
         _ => {}
@@ -570,6 +618,24 @@ fn run(
                     repo,
                 ) {
                     KeyAction::Quit => return Ok(()),
+                    KeyAction::CheckoutBranch(name) => {
+                        if git::checkout_branch(repo, &name).is_ok() {
+                            label = name;
+                            if let Ok(mut new_diff) = git::get_uncommitted_diff(repo) {
+                                let staged = git::get_staged_files(repo).unwrap_or_default();
+                                for file in &mut new_diff.files {
+                                    if staged.contains(&file.path) {
+                                        file.viewed = true;
+                                    }
+                                }
+                                diff = new_diff;
+                                tree = tree::FileTree::from_files(&diff.files);
+                                original_diff = diff.clone();
+                                app.reset_diff_state();
+                            }
+                        }
+                        break;
+                    }
                     KeyAction::Commit(msg) => {
                         if let Err(_e) = git::create_commit(repo, &msg) {
                             // Commit failed — stay as-is, live reload will show current state

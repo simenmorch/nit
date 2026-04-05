@@ -84,6 +84,30 @@ pub enum CommitField {
     Description,
 }
 
+pub struct BranchModal {
+    pub open: bool,
+    pub selected: usize,
+    pub branches: Vec<String>,
+    pub current: String,
+}
+
+impl Default for BranchModal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BranchModal {
+    pub fn new() -> Self {
+        Self {
+            open: false,
+            selected: 0,
+            branches: Vec::new(),
+            current: String::new(),
+        }
+    }
+}
+
 pub struct SearchState {
     pub query: String,
     pub matches: Vec<SearchMatch>,
@@ -122,6 +146,7 @@ pub struct App {
     pub pr_scroll: usize,
     pub pr_filter: PrFilter,
     pub view_context: ViewContext,
+    pub branch_modal: BranchModal,
 }
 
 impl Default for App {
@@ -159,6 +184,7 @@ impl App {
             pr_scroll: 0,
             pr_filter: PrFilter::new(),
             view_context: ViewContext::Default,
+            branch_modal: BranchModal::new(),
         }
     }
 
