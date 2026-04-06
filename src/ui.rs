@@ -897,7 +897,16 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         },
     };
 
-    let status = Line::from(vec![
+    let status_msg_spans: Vec<Span> = if let Some(ref msg) = app.status_message {
+        vec![
+            Span::raw("  "),
+            Span::styled(msg.as_str(), Style::default().fg(colors.fg_accent).add_modifier(ratatui::style::Modifier::BOLD)),
+        ]
+    } else {
+        vec![]
+    };
+
+    let mut spans = vec![
         Span::raw(" "),
         Span::styled(branch, Style::default().fg(colors.fg_info)),
         Span::raw("  "),
@@ -910,9 +919,12 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         Span::raw(" "),
         Span::styled(format!("-{}", total_removed), Style::default().fg(colors.fg_removed)),
         Span::styled(search_info, Style::default().fg(colors.fg_accent)),
-        Span::raw("  "),
-        Span::styled(&hints, Style::default().fg(colors.fg_muted)),
-    ]);
+    ];
+    spans.extend(status_msg_spans);
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled(&hints, Style::default().fg(colors.fg_muted)));
+
+    let status = Line::from(spans);
 
     frame.render_widget(Paragraph::new(status), area);
 }

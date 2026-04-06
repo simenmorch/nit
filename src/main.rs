@@ -114,6 +114,8 @@ enum KeyAction {
     LoadCommitDiff(String),
     LoadPrDiff(u64),
     ReturnToDefault,
+    GitPull,
+    GitPush,
 }
 
 fn handle_key(
@@ -125,6 +127,9 @@ fn handle_key(
     viewport_height: usize,
     repo: &git2::Repository,
 ) -> KeyAction {
+    // Clear status message on any keypress
+    app.status_message = None;
+
     // Search input mode — capture keystrokes for the query
     if app.searching {
         match key.code {
@@ -294,6 +299,12 @@ fn handle_key(
                 app::Tab::PRs => app.jump_to_bottom_prs(),
             }
             return KeyAction::Continue;
+        }
+        KeyCode::Char('p') if matches!(app.view_context, app::ViewContext::Default) => {
+            return KeyAction::GitPull;
+        }
+        KeyCode::Char('P') if matches!(app.view_context, app::ViewContext::Default) => {
+            return KeyAction::GitPush;
         }
         _ => {}
     }
@@ -632,6 +643,49 @@ fn run(
                                 tree = tree::FileTree::from_files(&diff.files);
                                 original_diff = diff.clone();
                                 app.reset_diff_state();
+                            }
+                        }
+                        break;
+                    }
+                    KeyAction::GitPull => {
+                        match git::git_pull(repo) {
+                            Ok(output) => {
+                                let msg = if output.is_empty() || output.contains("Already up to date") {
+                                    "Already up to date".to_string()
+                                } else {
+                                    "Pull complete".to_string()
+                                };
+                                app.status_message = Some(msg);
+                                // Refresh diff after pull
+                                if let Ok(mut new_diff) = git::get_uncommitted_diff(repo) {
+                                    let staged = git::get_staged_files(repo).unwrap_or_default();
+                                    for file in &mut new_diff.files {
+                                        if staged.contains(&file.path) {
+                                            file.viewed = true;
+                                        }
+                                    }
+                                    diff = new_diff;
+                                    tree = tree::FileTree::from_files(&diff.files);
+                                    original_diff = diff.clone();
+                                }
+                                // Refresh commit log
+                                if let Ok(log) = git::get_commit_log(repo, 200) {
+                                    app.commits = log;
+                                }
+                            }
+                            Err(e) => {
+                                app.status_message = Some(format!("Pull failed: {}", e));
+                            }
+                        }
+                        break;
+                    }
+                    KeyAction::GitPush => {
+                        match git::git_push(repo) {
+                            Ok(_) => {
+                                app.status_message = Some("Push complete".to_string());
+                            }
+                            Err(e) => {
+                                app.status_message = Some(format!("Push failed: {}", e));
                             }
                         }
                         break;

@@ -92,6 +92,38 @@ pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Pull from the remote (runs `git pull` in the repo's working directory).
+pub fn git_pull(repo: &Repository) -> Result<String> {
+    let workdir = repo.workdir().context("bare repository")?;
+    let output = std::process::Command::new("git")
+        .arg("pull")
+        .current_dir(workdir)
+        .output()
+        .context("failed to run git pull")?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!("{}", stderr)
+    }
+}
+
+/// Push to the remote (runs `git push` in the repo's working directory).
+pub fn git_push(repo: &Repository) -> Result<String> {
+    let workdir = repo.workdir().context("bare repository")?;
+    let output = std::process::Command::new("git")
+        .arg("push")
+        .current_dir(workdir)
+        .output()
+        .context("failed to run git push")?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!("{}", stderr)
+    }
+}
+
 /// Parse owner/repo from the origin remote URL.
 /// Supports SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
 pub fn owner_repo_from_remote(repo: &Repository) -> Result<(String, String)> {

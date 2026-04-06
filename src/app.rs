@@ -147,6 +147,7 @@ pub struct App {
     pub pr_filter: PrFilter,
     pub view_context: ViewContext,
     pub branch_modal: BranchModal,
+    pub status_message: Option<String>,
 }
 
 impl Default for App {
@@ -185,6 +186,7 @@ impl App {
             pr_filter: PrFilter::new(),
             view_context: ViewContext::Default,
             branch_modal: BranchModal::new(),
+            status_message: None,
         }
     }
 
