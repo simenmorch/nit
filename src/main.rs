@@ -387,6 +387,18 @@ fn handle_diff_tab_key(
     repo: &git2::Repository,
 ) -> KeyAction {
     // Ctrl-modified keys
+    match key.code {
+        KeyCode::PageDown => {
+            app.scroll_down_half_page(content_height, viewport_height);
+            return KeyAction::Continue;
+        }
+        KeyCode::PageUp => {
+            app.scroll_up_half_page(viewport_height);
+            return KeyAction::Continue;
+        }
+        _ => {}
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('d') => {
@@ -508,6 +520,18 @@ fn handle_diff_tab_key(
 }
 
 fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize) -> KeyAction {
+    match key.code {
+        KeyCode::PageDown => {
+            app.scroll_commits_down_half_page(viewport_height);
+            return KeyAction::Continue;
+        }
+        KeyCode::PageUp => {
+            app.scroll_commits_up_half_page(viewport_height);
+            return KeyAction::Continue;
+        }
+        _ => {}
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('d') => {
@@ -562,6 +586,18 @@ fn handle_prs_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize)
             _ => {}
         }
         return KeyAction::Continue;
+    }
+
+    match key.code {
+        KeyCode::PageDown => {
+            app.scroll_prs_down_half_page(viewport_height);
+            return KeyAction::Continue;
+        }
+        KeyCode::PageUp => {
+            app.scroll_prs_up_half_page(viewport_height);
+            return KeyAction::Continue;
+        }
+        _ => {}
     }
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
