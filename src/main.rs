@@ -708,8 +708,8 @@ fn run(
                         break;
                     }
                     KeyAction::Commit(msg) => {
-                        if let Err(_e) = git::create_commit(repo, &msg) {
-                            // Commit failed — stay as-is, live reload will show current state
+                        if let Err(e) = git::create_commit(repo, &msg) {
+                            app.status_message = Some(format!("Commit failed: {}", e));
                         }
                         // Refresh diff immediately after commit
                         if let Ok(new_diff) = git::get_uncommitted_diff(repo) {
@@ -747,8 +747,8 @@ fn run(
                                     app::ViewContext::Commit { short_oid, message, return_tab: app::Tab::Commits };
                                 app.active_tab = app::Tab::Diff;
                             }
-                            Err(_) => {
-                                // Stay on commits tab; diff unchanged
+                            Err(e) => {
+                                app.status_message = Some(format!("Failed to load commit: {}", e));
                             }
                         }
                         break;
@@ -780,8 +780,8 @@ fn run(
                                     };
                                     app.active_tab = app::Tab::Diff;
                                 }
-                                Err(_) => {
-                                    // Stay on PRs tab; diff unchanged
+                                Err(e) => {
+                                    app.status_message = Some(format!("Failed to load PR: {}", e));
                                 }
                             }
                         }
