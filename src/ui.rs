@@ -149,16 +149,24 @@ fn draw_sidebar(
                     let file = &diff.files[*file_index];
                     let viewed = if file.viewed { "✓ " } else { "  " };
                     let stats = format!("+{} -{}", file.added, file.removed);
+                    let (status_char, status_color) = match &file.status {
+                        model::FileStatus::Added => ("A", colors.fg_added),
+                        model::FileStatus::Modified => ("M", colors.fg_accent),
+                        model::FileStatus::Deleted => ("D", colors.fg_removed),
+                        model::FileStatus::Renamed { .. } => ("R", colors.fg_info),
+                    };
                     let name_style = if is_selected {
                         Style::default().fg(colors.fg_selected)
                     } else {
                         Style::default().fg(colors.fg)
                     };
+                    let file_indent = "  ".repeat(entry.depth.saturating_sub(1));
+                    let status_badge = format!("{} ", status_char);
                     Line::from(vec![
                         Span::styled(viewed, Style::default().fg(colors.fg_added)),
                         Span::raw(marker),
-                        Span::raw(indent),
-                        Span::raw("  "), // align with folder names (arrow placeholder)
+                        Span::raw(file_indent),
+                        Span::styled(status_badge, Style::default().fg(status_color)),
                         Span::styled(name.clone(), name_style),
                         Span::raw("  "),
                         Span::styled(stats, Style::default().fg(colors.fg_muted)),
