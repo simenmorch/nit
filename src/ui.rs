@@ -813,6 +813,7 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
             ("j / k", "Scroll up / down"),
             ("Ctrl+d / u", "Half-page down / up"),
             ("Ctrl+n / p", "Next / prev hunk"),
+            ("] / [", "Next / prev file"),
             ("h", "Focus sidebar"),
         ]),
         ("Diff — Shared", &[

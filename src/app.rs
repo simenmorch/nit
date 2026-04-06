@@ -219,6 +219,28 @@ impl App {
         }
     }
 
+    pub fn select_next_file(&mut self, visible: &[FlatEntry]) {
+        for (i, entry) in visible.iter().enumerate().skip(self.selected + 1) {
+            if let FlatEntryKind::File { file_index, .. } = &entry.kind {
+                self.selected = i;
+                self.selected_file = *file_index;
+                self.scroll = 0;
+                return;
+            }
+        }
+    }
+
+    pub fn select_prev_file(&mut self, visible: &[FlatEntry]) {
+        for i in (0..self.selected).rev() {
+            if let FlatEntryKind::File { file_index, .. } = &visible[i].kind {
+                self.selected = i;
+                self.selected_file = *file_index;
+                self.scroll = 0;
+                return;
+            }
+        }
+    }
+
     pub fn activate_entry(&mut self, visible: &[FlatEntry]) {
         if let Some(entry) = visible.get(self.selected) {
             match &entry.kind {

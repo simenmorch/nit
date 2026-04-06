@@ -449,6 +449,8 @@ fn handle_diff_tab_key(
             }
             KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
             KeyCode::Char('h') => app.focus_sidebar(),
+            KeyCode::Char(']') => app.select_next_file(visible),
+            KeyCode::Char('[') => app.select_prev_file(visible),
             KeyCode::Esc => {
                 if app.search.is_some() {
                     app.clear_search();
