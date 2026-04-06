@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
@@ -371,6 +371,9 @@ fn draw_file_diff(
         );
 
     frame.render_widget(diff_view, area);
+
+    let content_height = diff_line_count(file, DiffViewMode::Unified);
+    render_scrollbar(frame, area, app.scroll, content_height, inner_height, colors);
 }
 
 /// Highlight occurrences of the search query within a list of spans.
@@ -1149,6 +1152,9 @@ fn draw_file_diff_split(
 
     frame.render_widget(left_widget, left_area);
     frame.render_widget(right_widget, right_area);
+
+    let content_height = split::split_row_count(&file.hunks);
+    render_scrollbar(frame, right_area, app.scroll, content_height, inner_height, colors);
 }
 
 /// Format a single line number for the split-view gutter (4 chars + 1 space).
@@ -1157,6 +1163,31 @@ fn format_split_gutter(num: Option<usize>) -> String {
         Some(n) => format!("{:>4} ", n),
         None => "     ".to_string(),
     }
+}
+
+/// Render a vertical scrollbar on the right edge of an area.
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    position: usize,
+    content_length: usize,
+    viewport_height: usize,
+    colors: &ColorsConfig,
+) {
+    if content_length <= viewport_height {
+        return;
+    }
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .track_symbol(Some("│"))
+        .thumb_symbol("█")
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_style(Style::default().fg(colors.border_unfocused))
+        .thumb_style(Style::default().fg(colors.fg_muted));
+    let mut state = ScrollbarState::new(content_length.saturating_sub(viewport_height))
+        .position(position)
+        .viewport_content_length(viewport_height);
+    frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
 /// Build syntax-highlighted spans for a single line with an optional diff background.
