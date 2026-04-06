@@ -236,7 +236,10 @@ fn draw_file_diff(
         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
     let vis_start = app.scroll;
-    let vis_end = vis_start + inner_height;
+    // Build extra lines to compensate for wrapping pushing content down
+    let vis_end = vis_start + inner_height * 2;
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let wrap_indent_style = Style::default().fg(colors.fg_muted);
 
     let mut lines: Vec<Line> = Vec::with_capacity(inner_height);
     let mut line_index: usize = 0;
@@ -274,7 +277,7 @@ fn draw_file_diff(
                 hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
             }
 
-            lines.push(Line::from(hunk_header_spans));
+            lines.extend(wrap_line_spans(hunk_header_spans, inner_width, 10, wrap_indent_style));
         }
         line_index += 1;
 
@@ -355,7 +358,7 @@ fn draw_file_diff(
                     spans = highlight_search_in_spans(spans, app, bg);
                 }
 
-                lines.push(Line::from(spans));
+                lines.extend(wrap_line_spans(spans, inner_width, 10, wrap_indent_style));
             } else {
                 // Pre-viewport: feed highlighter to maintain state within hunk
                 let _ = highlighter.highlight_line(content, ss);
@@ -381,7 +384,6 @@ fn draw_file_diff(
         Style::default().fg(colors.border_unfocused)
     };
 
-    // No .scroll() needed — we only built visible lines
     let diff_view = Paragraph::new(lines)
         .block(
             Block::default()
@@ -453,6 +455,95 @@ fn highlight_search_in_spans(spans: Vec<Span<'_>>, app: &App, bg: Color) -> Vec<
         } else if last_orig == 0 {
             result.push(Span::styled(text, style));
         }
+    }
+
+    result
+}
+
+/// Wrap a line's spans to fit within `max_width` columns.
+/// Continuation lines are indented with `indent` spaces using `indent_style`.
+fn wrap_line_spans(
+    spans: Vec<Span<'_>>,
+    max_width: usize,
+    indent: usize,
+    indent_style: Style,
+) -> Vec<Line<'static>> {
+    if max_width == 0 {
+        return vec![Line::from(
+            spans
+                .into_iter()
+                .map(|s| Span::styled(s.content.to_string(), s.style))
+                .collect::<Vec<_>>(),
+        )];
+    }
+
+    let styled_chars: Vec<(char, Style)> = spans
+        .iter()
+        .flat_map(|s| s.content.chars().map(move |c| (c, s.style)))
+        .collect();
+
+    let total = styled_chars.len();
+    if total <= max_width {
+        return vec![Line::from(
+            spans
+                .into_iter()
+                .map(|s| Span::styled(s.content.to_string(), s.style))
+                .collect::<Vec<_>>(),
+        )];
+    }
+
+    let mut result: Vec<Line<'static>> = Vec::new();
+    let mut pos = 0;
+    let mut is_first = true;
+
+    while pos < total {
+        let content_width = if is_first {
+            max_width
+        } else {
+            max_width.saturating_sub(indent)
+        };
+        if content_width == 0 {
+            break;
+        }
+
+        let hard_end = (pos + content_width).min(total);
+        // Prefer breaking at a word boundary (last space within the limit)
+        let end = if hard_end < total {
+            let search_start = pos + indent; // don't break inside the gutter region on first line
+            let last_space = styled_chars[search_start.min(hard_end)..hard_end]
+                .iter()
+                .rposition(|&(c, _)| c == ' ')
+                .map(|i| search_start.min(hard_end) + i + 1);
+            last_space.unwrap_or(hard_end)
+        } else {
+            hard_end
+        };
+        let mut line_spans: Vec<Span<'static>> = Vec::new();
+
+        if !is_first {
+            line_spans.push(Span::styled(" ".repeat(indent), indent_style));
+        }
+
+        // Coalesce adjacent chars with the same style into spans
+        let mut text = String::new();
+        let mut style = styled_chars[pos].1;
+        for &(c, s) in &styled_chars[pos..end] {
+            if s == style {
+                text.push(c);
+            } else {
+                line_spans.push(Span::styled(text, style));
+                text = String::new();
+                style = s;
+                text.push(c);
+            }
+        }
+        if !text.is_empty() {
+            line_spans.push(Span::styled(text, style));
+        }
+
+        result.push(Line::from(line_spans));
+        pos = end;
+        is_first = false;
     }
 
     result
@@ -1183,7 +1274,10 @@ fn draw_file_diff_split(
         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
     let vis_start = app.scroll;
-    let vis_end = vis_start + inner_height;
+    // Build extra lines to compensate for wrapping pushing content down
+    let vis_end = vis_start + inner_height * 2;
+    let inner_width = left_area.width.saturating_sub(2) as usize;
+    let wrap_indent_style = Style::default().fg(colors.fg_muted);
 
     let mut left_lines: Vec<Line> = Vec::with_capacity(inner_height);
     let mut right_lines: Vec<Line> = Vec::with_capacity(inner_height);
@@ -1253,8 +1347,14 @@ fn draw_file_diff_split(
                     left_spans = highlight_search_in_spans(left_spans, app, bg);
                     right_spans = highlight_search_in_spans(right_spans, app, bg);
                 }
-                left_lines.push(Line::from(left_spans));
-                right_lines.push(Line::from(right_spans));
+                let wrapped_l = wrap_line_spans(left_spans, inner_width, 6, wrap_indent_style);
+                let wrapped_r = wrap_line_spans(right_spans, inner_width, 6, wrap_indent_style);
+                let max_rows = wrapped_l.len().max(wrapped_r.len());
+                left_lines.extend(wrapped_l);
+                right_lines.extend(wrapped_r);
+                for _ in left_lines.len()..right_lines.len() { left_lines.push(Line::from(vec![])); }
+                for _ in right_lines.len()..left_lines.len() { right_lines.push(Line::from(vec![])); }
+                let _ = max_rows;
             }
             SplitRow::Context(line) => {
                 let content = line.content.trim_end();
@@ -1268,8 +1368,12 @@ fn draw_file_diff_split(
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
                 }
-                left_lines.push(Line::from(l_spans));
-                right_lines.push(Line::from(r_spans));
+                let wrapped_l = wrap_line_spans(l_spans, inner_width, 6, wrap_indent_style);
+                let wrapped_r = wrap_line_spans(r_spans, inner_width, 6, wrap_indent_style);
+                left_lines.extend(wrapped_l);
+                right_lines.extend(wrapped_r);
+                for _ in left_lines.len()..right_lines.len() { left_lines.push(Line::from(vec![])); }
+                for _ in right_lines.len()..left_lines.len() { right_lines.push(Line::from(vec![])); }
             }
             SplitRow::Paired { left, right, left_spans: l_inline, right_spans: r_inline } => {
                 let l_content = left.content.trim_end();
@@ -1290,8 +1394,12 @@ fn draw_file_diff_split(
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
                 }
-                left_lines.push(Line::from(l_spans));
-                right_lines.push(Line::from(r_spans));
+                let wrapped_l = wrap_line_spans(l_spans, inner_width, 6, wrap_indent_style);
+                let wrapped_r = wrap_line_spans(r_spans, inner_width, 6, wrap_indent_style);
+                left_lines.extend(wrapped_l);
+                right_lines.extend(wrapped_r);
+                for _ in left_lines.len()..right_lines.len() { left_lines.push(Line::from(vec![])); }
+                for _ in right_lines.len()..left_lines.len() { right_lines.push(Line::from(vec![])); }
             }
             SplitRow::LeftOnly(line) => {
                 let content = line.content.trim_end();
@@ -1301,8 +1409,12 @@ fn draw_file_diff_split(
                 if let Some(bg) = search_bg {
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
                 }
-                left_lines.push(Line::from(l_spans));
-                right_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
+                let wrapped = wrap_line_spans(l_spans, inner_width, 6, wrap_indent_style);
+                let n = wrapped.len();
+                left_lines.extend(wrapped);
+                for _ in 0..n {
+                    right_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
+                }
             }
             SplitRow::RightOnly(line) => {
                 let content = line.content.trim_end();
@@ -1312,8 +1424,12 @@ fn draw_file_diff_split(
                 if let Some(bg) = search_bg {
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
                 }
-                left_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
-                right_lines.push(Line::from(r_spans));
+                let wrapped = wrap_line_spans(r_spans, inner_width, 6, wrap_indent_style);
+                let n = wrapped.len();
+                right_lines.extend(wrapped);
+                for _ in 0..n {
+                    left_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
+                }
             }
         }
     }
