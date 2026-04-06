@@ -1104,7 +1104,14 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         String::new()
     };
 
-    let hints = "?: help  q: quit";
+    let in_subview = matches!(app.view_context, ViewContext::Commit { .. } | ViewContext::PullRequest { .. });
+    let hints = if app.search.is_some() && in_subview {
+        "Esc: clear search  ?: help  q: quit"
+    } else if in_subview {
+        "Esc: back  ?: help  q: quit"
+    } else {
+        "?: help  q: quit"
+    };
 
     let status_msg_spans: Vec<Span> = if let Some(ref msg) = app.status_message {
         vec![
