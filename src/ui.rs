@@ -1331,7 +1331,12 @@ fn draw_file_diff_split(
         Style::default().fg(colors.border_unfocused)
     };
 
-    let left_title = format!(" {}{} ", file.path, viewed_indicator);
+    let old_path = match &file.status {
+        model::FileStatus::Renamed { from } => from.as_str(),
+        _ => &file.path,
+    };
+    let left_title = format!(" old: {} ", old_path);
+    let right_title = format!(" new: {}{} ", file.path, viewed_indicator);
     let left_widget = Paragraph::new(left_lines).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1339,7 +1344,6 @@ fn draw_file_diff_split(
             .title(Span::styled(left_title, Style::default().add_modifier(Modifier::BOLD))),
     );
 
-    let right_title = format!(" {}{} ", file.path, viewed_indicator);
     let right_widget = Paragraph::new(right_lines).block(
         Block::default()
             .borders(Borders::ALL)
