@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::git;
 use crate::model;
 use crate::tree::{FlatEntry, FlatEntryKind};
 
@@ -99,8 +100,8 @@ pub struct ConfirmModal {
 pub struct BranchModal {
     pub open: bool,
     pub selected: usize,
-    pub branches: Vec<String>,
-    pub current: String,
+    pub branches: Vec<git::BranchInfo>,
+    pub filter: String,
 }
 
 impl Default for BranchModal {
@@ -115,8 +116,27 @@ impl BranchModal {
             open: false,
             selected: 0,
             branches: Vec::new(),
-            current: String::new(),
+            filter: String::new(),
         }
+    }
+
+    pub fn filtered(&self) -> Vec<&git::BranchInfo> {
+        if self.filter.is_empty() {
+            self.branches.iter().collect()
+        } else {
+            let query = self.filter.to_lowercase();
+            self.branches
+                .iter()
+                .filter(|b| b.name.to_lowercase().contains(&query))
+                .collect()
+        }
+    }
+
+    pub fn current_name(&self) -> &str {
+        self.branches.iter()
+            .find(|b| b.is_head)
+            .map(|b| b.name.as_str())
+            .unwrap_or("")
     }
 }
 

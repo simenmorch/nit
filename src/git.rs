@@ -55,6 +55,45 @@ pub fn get_staged_files(repo: &Repository) -> Result<std::collections::HashSet<S
 }
 
 /// List local branch names, with the current branch first.
+#[derive(Debug, Clone)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_head: bool,
+    pub short_oid: String,
+    pub message: String,
+}
+
+pub fn list_branches_detailed(repo: &Repository) -> Result<Vec<BranchInfo>> {
+    let iter = repo
+        .branches(Some(BranchType::Local))
+        .context("failed to list branches")?;
+    let mut current = Vec::new();
+    let mut others = Vec::new();
+    for branch_result in iter {
+        let (branch, _) = branch_result.context("failed to read branch")?;
+        if let Ok(Some(name)) = branch.name() {
+            let is_head = branch.is_head();
+            let (short_oid, message) = if let Ok(commit) = branch.get().peel_to_commit() {
+                let oid = commit.id().to_string();
+                let short = oid[..7.min(oid.len())].to_string();
+                let msg = commit.summary().unwrap_or("").to_string();
+                (short, msg)
+            } else {
+                (String::new(), String::new())
+            };
+            let info = BranchInfo { name: name.to_string(), is_head, short_oid, message };
+            if is_head {
+                current.push(info);
+            } else {
+                others.push(info);
+            }
+        }
+    }
+    others.sort_by(|a, b| a.name.cmp(&b.name));
+    current.append(&mut others);
+    Ok(current)
+}
+
 pub fn list_branches(repo: &Repository) -> Result<Vec<String>> {
     let iter = repo
         .branches(Some(BranchType::Local))

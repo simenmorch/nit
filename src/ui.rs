@@ -738,21 +738,25 @@ fn draw_pr_filter_modal(frame: &mut Frame, app: &App, area: Rect, colors: &Color
 }
 
 fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
-    let branches = &app.branch_modal.branches;
-    if branches.is_empty() {
+    let filtered = app.branch_modal.filtered();
+    if app.branch_modal.branches.is_empty() {
         return;
     }
 
-    let max_name = branches.iter().map(|b| b.len()).max().unwrap_or(0);
-    let modal_width = (max_name as u16 + 8).clamp(20, area.width.saturating_sub(4)); // marker + padding + "* "
-    let modal_height = (branches.len() as u16 + 2).min(area.height.saturating_sub(2)); // +2 for borders
-    let visible_rows = (modal_height - 2) as usize;
+    let has_filter = app.branch_modal.branches.len() > 10;
+
+    let modal_width = (area.width / 2).max(40);
+    let modal_height = (area.height / 2).max(10);
+    let extra_lines: u16 = if has_filter { 3 } else { 2 }; // borders (+ filter line)
+    let visible_rows = modal_height.saturating_sub(extra_lines) as usize;
 
     let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
     let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
+    let inner_width = modal_width.saturating_sub(2) as usize; // inside borders
 
     let bg = colors.bg.unwrap_or(Color::Black);
+    let highlight_bg = colors.border_unfocused;
 
     // Scroll so the selected item is visible
     let scroll_offset = if app.branch_modal.selected >= visible_rows {
@@ -761,33 +765,87 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
         0
     };
 
-    let lines: Vec<Line> = branches
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_rows)
-        .map(|(i, name)| {
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Filter input line (only when > 10 branches)
+    if has_filter {
+        lines.push(Line::from(vec![
+            Span::styled("/ ", Style::default().fg(colors.fg_accent)),
+            Span::styled(&app.branch_modal.filter, Style::default().fg(colors.fg)),
+            Span::styled("█", Style::default().fg(colors.fg_muted)),
+        ]));
+    }
+
+    // Commit info starts just past halfway
+    let commit_col = inner_width / 2;
+
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No matching branches",
+            Style::default().fg(colors.fg_muted),
+        )));
+    } else {
+        for (i, branch) in filtered.iter().enumerate().skip(scroll_offset).take(visible_rows) {
             let is_selected = i == app.branch_modal.selected;
-            let is_current = *name == app.branch_modal.current;
 
-            let marker = if is_selected { "▸ " } else { "  " };
-            let prefix = if is_current { "* " } else { "  " };
+            let prefix = if branch.is_head { "* " } else { "  " };
 
-            let style = if is_selected {
-                Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
-            } else if is_current {
-                Style::default().fg(colors.fg_info)
+            let name_style = if branch.is_head {
+                Style::default().fg(colors.fg_accent)
             } else {
                 Style::default().fg(colors.fg)
             };
 
-            Line::from(vec![
-                Span::styled(marker, style),
-                Span::styled(prefix, style),
-                Span::styled(name.as_str(), style),
-            ])
-        })
-        .collect();
+            // Truncate branch name if it would overflow into the commit column
+            let name_budget = commit_col.saturating_sub(2); // prefix
+            let name_display: String = if branch.name.len() > name_budget && name_budget > 3 {
+                let truncated: String = branch.name.chars().take(name_budget - 3).collect();
+                format!("{}...", truncated)
+            } else {
+                branch.name.clone()
+            };
+            let name_padding = commit_col.saturating_sub(2 + name_display.len());
+
+            // Truncate message to fit in the remaining space
+            let commit_budget = inner_width.saturating_sub(commit_col);
+            let oid_and_space = branch.short_oid.len() + 1;
+            let msg_budget = commit_budget.saturating_sub(oid_and_space);
+            let msg: String = if branch.message.chars().count() > msg_budget && msg_budget > 3 {
+                let truncated: String = branch.message.chars().take(msg_budget - 3).collect();
+                format!("{}...", truncated)
+            } else {
+                branch.message.clone()
+            };
+            let trail = commit_budget.saturating_sub(oid_and_space + msg.len());
+
+            let row_style = if is_selected {
+                Style::default().bg(highlight_bg)
+            } else {
+                Style::default()
+            };
+            let name_style = if is_selected { name_style.bg(highlight_bg) } else { name_style };
+            let oid_style = if is_selected {
+                Style::default().fg(colors.fg_accent).bg(highlight_bg)
+            } else {
+                Style::default().fg(colors.fg_accent)
+            };
+            let msg_style = if is_selected {
+                Style::default().fg(colors.fg).bg(highlight_bg)
+            } else {
+                Style::default().fg(colors.fg)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(prefix, name_style),
+                Span::styled(name_display, name_style),
+                Span::styled(" ".repeat(name_padding), row_style),
+                Span::styled(&branch.short_oid, oid_style),
+                Span::styled(" ", row_style),
+                Span::styled(msg, msg_style),
+                Span::styled(" ".repeat(trail), row_style),
+            ]));
+        }
+    }
 
     frame.render_widget(Clear, modal_area);
     let modal = Paragraph::new(lines).block(

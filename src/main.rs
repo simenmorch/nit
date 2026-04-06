@@ -219,15 +219,17 @@ fn handle_key(
 
     // Branch modal intercepts all keys
     if app.branch_modal.open {
+        let has_filter = app.branch_modal.branches.len() > 10;
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                let len = app.branch_modal.branches.len();
+            KeyCode::Char('j') | KeyCode::Down if !has_filter || key.code == KeyCode::Down => {
+                let len = app.branch_modal.filtered().len();
                 if len > 0 {
                     app.branch_modal.selected = (app.branch_modal.selected + 1) % len;
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let len = app.branch_modal.branches.len();
+            KeyCode::Char('k') | KeyCode::Up if !has_filter || key.code == KeyCode::Up => {
+                let len = app.branch_modal.filtered().len();
                 if len > 0 {
                     if app.branch_modal.selected == 0 {
                         app.branch_modal.selected = len - 1;
@@ -236,17 +238,29 @@ fn handle_key(
                     }
                 }
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(branch) = app.branch_modal.branches.get(app.branch_modal.selected) {
-                    let name = branch.clone();
+            KeyCode::Enter | KeyCode::Char(' ') if !has_filter || key.code == KeyCode::Enter => {
+                let filtered = app.branch_modal.filtered();
+                if let Some(branch) = filtered.get(app.branch_modal.selected) {
+                    let name = branch.name.clone();
+                    let is_current = branch.is_head;
                     app.branch_modal.open = false;
-                    if name != app.branch_modal.current {
+                    app.branch_modal.filter.clear();
+                    if !is_current {
                         return KeyAction::CheckoutBranch(name);
                     }
                 }
             }
-            KeyCode::Esc | KeyCode::Char('b') => {
+            KeyCode::Esc => {
                 app.branch_modal.open = false;
+                app.branch_modal.filter.clear();
+            }
+            KeyCode::Backspace if has_filter => {
+                app.branch_modal.filter.pop();
+                app.branch_modal.selected = 0;
+            }
+            KeyCode::Char(c) if has_filter => {
+                app.branch_modal.filter.push(c);
+                app.branch_modal.selected = 0;
             }
             _ => {}
         }
@@ -442,12 +456,11 @@ fn handle_diff_tab_key(
             return KeyAction::Continue;
         }
         KeyCode::Char('b') if matches!(app.view_context, app::ViewContext::Default) => {
-            if let Ok(branches) = git::list_branches(repo) {
-                let current = git::branch_name(repo);
-                let selected = branches.iter().position(|b| b == &current).unwrap_or(0);
+            if let Ok(branches) = git::list_branches_detailed(repo) {
+                let selected = branches.iter().position(|b| b.is_head).unwrap_or(0);
                 app.branch_modal.branches = branches;
-                app.branch_modal.current = current;
                 app.branch_modal.selected = selected;
+                app.branch_modal.filter.clear();
                 app.branch_modal.open = true;
             }
             return KeyAction::Continue;
