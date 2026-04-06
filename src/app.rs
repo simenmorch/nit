@@ -149,6 +149,7 @@ pub struct App {
     pub branch_modal: BranchModal,
     pub status_message: Option<String>,
     pub show_help: bool,
+    pub loading_message: Option<String>,
 }
 
 impl Default for App {
@@ -189,6 +190,7 @@ impl App {
             branch_modal: BranchModal::new(),
             status_message: None,
             show_help: false,
+            loading_message: None,
         }
     }
 

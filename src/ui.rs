@@ -86,6 +86,10 @@ pub fn draw(
         draw_help_modal(frame, area, colors);
     }
 
+    if let Some(ref msg) = app.loading_message {
+        draw_loading_overlay(frame, outer[1], msg, colors);
+    }
+
     if app.searching {
         draw_search_input(frame, app, outer[2], colors);
     } else {
@@ -872,6 +876,33 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
     );
 
     frame.render_widget(modal, modal_area);
+}
+
+fn draw_loading_overlay(frame: &mut Frame, area: Rect, message: &str, colors: &ColorsConfig) {
+    let text_width = message.len() as u16 + 4; // padding
+    let modal_width = text_width.clamp(20, area.width.saturating_sub(4));
+    let modal_height: u16 = 3;
+
+    let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let bg = colors.bg.unwrap_or(Color::Black);
+
+    frame.render_widget(Clear, modal_area);
+    let widget = Paragraph::new(Line::from(Span::styled(
+        message,
+        Style::default().fg(colors.fg_muted),
+    )))
+    .alignment(ratatui::layout::Alignment::Center)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(colors.border_focused))
+            .style(Style::default().bg(bg)),
+    );
+
+    frame.render_widget(widget, modal_area);
 }
 
 fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {

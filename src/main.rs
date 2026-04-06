@@ -731,6 +731,12 @@ fn run(
                         let short_oid = commit_info
                             .map(|c| c.short_oid.clone())
                             .unwrap_or_else(|| oid[..7.min(oid.len())].to_string());
+
+                        app.loading_message = Some(format!("Loading commit {}...", short_oid));
+                        let vis = tree.flatten(&app.collapsed);
+                        terminal.draw(|frame| ui::draw(frame, &app, &diff, &vis, &label, ss, theme, colors))?;
+                        app.loading_message = None;
+
                         match git::get_commit_diff(repo, &oid) {
                             Ok(new_diff) => {
                                 diff = new_diff;
@@ -753,6 +759,12 @@ fn run(
                             let title = pr_info
                                 .map(|p| p.title.clone())
                                 .unwrap_or_default();
+
+                            app.loading_message = Some(format!("Loading PR #{}...", number));
+                            let vis = tree.flatten(&app.collapsed);
+                            terminal.draw(|frame| ui::draw(frame, &app, &diff, &vis, &label, ss, theme, colors))?;
+                            app.loading_message = None;
+
                             match github::GitHubProvider::new(owner.clone(), repo_name.clone())
                                 .and_then(|provider| provider.fetch_diff(&number.to_string()))
                             {
