@@ -253,6 +253,17 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
+    // Help modal intercepts all keys when open
+    if app.show_help {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                app.show_help = false;
+            }
+            _ => {}
+        }
+        return KeyAction::Continue;
+    }
+
     // Filter modal intercepts all keys — must be checked before global keys
     if app.pr_filter.modal_open {
         return handle_prs_tab_key(key, app, viewport_height);
@@ -274,6 +285,10 @@ fn handle_key(
     // Global keys (work regardless of tab)
     match key.code {
         KeyCode::Char('q') => return KeyAction::Quit,
+        KeyCode::Char('?') => {
+            app.show_help = true;
+            return KeyAction::Continue;
+        }
         KeyCode::Char('1') => {
             app.switch_tab(app::Tab::Diff);
             return KeyAction::Continue;

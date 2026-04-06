@@ -82,6 +82,10 @@ pub fn draw(
         draw_branch_modal(frame, app, area, colors);
     }
 
+    if app.show_help {
+        draw_help_modal(frame, area, colors);
+    }
+
     if app.searching {
         draw_search_input(frame, app, outer[2], colors);
     } else {
@@ -781,6 +785,86 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
     frame.render_widget(modal, modal_area);
 }
 
+fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
+    let sections: &[(&str, &[(&str, &str)])] = &[
+        ("Global", &[
+            ("1 / 2 / 3", "Switch tab (Diff / Commits / PRs)"),
+            ("q", "Quit"),
+            ("?", "Toggle this help"),
+            ("gg / G", "Jump to top / bottom"),
+        ]),
+        ("Diff — Sidebar", &[
+            ("j / k", "Navigate files"),
+            ("l / Enter", "Open file / toggle folder"),
+            ("Space", "Fold / unfold folder"),
+            ("v", "Toggle viewed"),
+            ("V", "Mark viewed & next"),
+            ("Tab", "Focus diff panel"),
+        ]),
+        ("Diff — Panel", &[
+            ("j / k", "Scroll up / down"),
+            ("Ctrl+d / u", "Half-page down / up"),
+            ("Ctrl+n / p", "Next / prev hunk"),
+            ("h", "Focus sidebar"),
+        ]),
+        ("Diff — Shared", &[
+            ("/ → Enter", "Search in file"),
+            ("n / N", "Next / prev match"),
+            ("s", "Toggle unified / split view"),
+            ("Esc", "Clear search or go back"),
+        ]),
+        ("Local repo", &[
+            ("c", "Commit staged changes"),
+            ("b", "Switch branch"),
+            ("p / P", "Git pull / push"),
+        ]),
+        ("Commits / PRs", &[
+            ("j / k", "Navigate list"),
+            ("Ctrl+d / u", "Half-page down / up"),
+            ("Enter", "View diff"),
+            ("f", "Filter PRs (PRs tab)"),
+            ("Esc", "Return to list"),
+        ]),
+    ];
+
+    let mut content_lines: Vec<Line> = Vec::new();
+    for (i, (heading, bindings)) in sections.iter().enumerate() {
+        if i > 0 {
+            content_lines.push(Line::from(""));
+        }
+        content_lines.push(Line::from(Span::styled(
+            *heading,
+            Style::default().fg(colors.fg_accent).add_modifier(Modifier::BOLD),
+        )));
+        for (key, desc) in *bindings {
+            content_lines.push(Line::from(vec![
+                Span::styled(format!("  {:18}", key), Style::default().fg(colors.fg_selected)),
+                Span::styled(*desc, Style::default().fg(colors.fg)),
+            ]));
+        }
+    }
+
+    let modal_width = 52_u16.min(area.width.saturating_sub(4));
+    let modal_height = (content_lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+
+    let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let bg = colors.bg.unwrap_or(Color::Black);
+
+    frame.render_widget(Clear, modal_area);
+    let modal = Paragraph::new(content_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(colors.border_focused))
+            .title(" Help ")
+            .style(Style::default().bg(bg)),
+    );
+
+    frame.render_widget(modal, modal_area);
+}
+
 fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
     use crate::app::CommitField;
 
@@ -888,33 +972,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         String::new()
     };
 
-    let mode_hint = match app.view_mode {
-        crate::app::DiffViewMode::Unified => "s: split",
-        crate::app::DiffViewMode::SideBySide => "s: unified",
-    };
-
-    let esc_hint = if matches!(app.view_context, ViewContext::Commit { .. } | ViewContext::PullRequest { .. }) {
-        "  Esc: back"
-    } else {
-        ""
-    };
-
-    let hints = match app.active_tab {
-        Tab::Commits => {
-            "j/k: navigate  Ctrl+d/u: page  Enter: view diff  gg/G: jump  1: diff  3: prs  q: quit".to_string()
-        }
-        Tab::PRs => {
-            "j/k: navigate  Ctrl+d/u: page  Enter: view diff  f: filter  gg/G: jump  1: diff  2: commits  q: quit".to_string()
-        }
-        Tab::Diff => match app.focus {
-            Focus::Sidebar => format!(
-                "j/k: navigate  l/Enter: open  Space: fold  v/V: viewed  G/gg: jump  /: search  {mode_hint}  Tab: diff{esc_hint}  2: commits  3: prs  q: quit"
-            ),
-            Focus::Diff => format!(
-                "j/k: scroll  Ctrl+d/u: page  Ctrl+n/p: hunk  /: search  n/N: match  {mode_hint}  h: sidebar{esc_hint}  2: commits  3: prs  q: quit"
-            ),
-        },
-    };
+    let hints = "?: help  q: quit";
 
     let status_msg_spans: Vec<Span> = if let Some(ref msg) = app.status_message {
         vec![
@@ -941,7 +999,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
     ];
     spans.extend(status_msg_spans);
     spans.push(Span::raw("  "));
-    spans.push(Span::styled(&hints, Style::default().fg(colors.fg_muted)));
+    spans.push(Span::styled(hints, Style::default().fg(colors.fg_muted)));
 
     let status = Line::from(spans);
 

@@ -148,6 +148,7 @@ pub struct App {
     pub view_context: ViewContext,
     pub branch_modal: BranchModal,
     pub status_message: Option<String>,
+    pub show_help: bool,
 }
 
 impl Default for App {
@@ -187,6 +188,7 @@ impl App {
             view_context: ViewContext::Default,
             branch_modal: BranchModal::new(),
             status_message: None,
+            show_help: false,
         }
     }
 
