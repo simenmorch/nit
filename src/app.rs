@@ -143,6 +143,7 @@ impl BranchModal {
 pub struct SearchState {
     pub query: String,
     pub matches: Vec<SearchMatch>,
+    pub match_lines: HashSet<usize>,
     pub current: usize,
 }
 
@@ -230,6 +231,10 @@ impl App {
 
     pub fn filtered_prs(&self) -> Vec<&model::PrInfo> {
         self.prs.iter().filter(|pr| self.pr_filter.matches(pr)).collect()
+    }
+
+    pub fn filtered_pr_count(&self) -> usize {
+        self.prs.iter().filter(|pr| self.pr_filter.matches(pr)).count()
     }
 
     pub fn update_selected_file(&mut self, visible: &[FlatEntry]) {
@@ -581,9 +586,11 @@ impl App {
             self.scroll = m.line_index;
         }
 
+        let match_lines: HashSet<usize> = matches.iter().map(|m| m.line_index).collect();
         self.search = Some(SearchState {
             query,
             matches,
+            match_lines,
             current: 0,
         });
     }
@@ -698,7 +705,7 @@ impl App {
     }
 
     pub fn select_next_pr(&mut self) {
-        let count = self.filtered_prs().len();
+        let count = self.filtered_pr_count();
         if count > 0 && self.pr_selected < count - 1 {
             self.pr_selected += 1;
         }
@@ -724,7 +731,7 @@ impl App {
 
     pub fn scroll_prs_down_half_page(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
-        let count = self.filtered_prs().len();
+        let count = self.filtered_pr_count();
         if count > 0 {
             self.pr_selected = (self.pr_selected + half).min(count - 1);
         }
@@ -741,14 +748,14 @@ impl App {
     }
 
     pub fn jump_to_bottom_prs(&mut self) {
-        let count = self.filtered_prs().len();
+        let count = self.filtered_pr_count();
         if count > 0 {
             self.pr_selected = count - 1;
         }
     }
 
     pub fn clamp_pr_selection(&mut self) {
-        let count = self.filtered_prs().len();
+        let count = self.filtered_pr_count();
         if count == 0 {
             self.pr_selected = 0;
             self.pr_scroll = 0;
@@ -1086,6 +1093,7 @@ mod tests {
         app.search = Some(crate::app::SearchState {
             query: "test".to_string(),
             matches: vec![],
+            match_lines: HashSet::new(),
             current: 0,
         });
         app.clear_search();
@@ -1347,6 +1355,7 @@ mod tests {
         app.search = Some(SearchState {
             query: "query".to_string(),
             matches: vec![],
+            match_lines: HashSet::new(),
             current: 0,
         });
 

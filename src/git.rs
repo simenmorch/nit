@@ -383,9 +383,7 @@ pub fn format_relative_time(seconds_ago: i64) -> String {
 fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
     let mut files: Vec<model::DiffFile> = Vec::new();
 
-    for delta_idx in 0..diff.deltas().len() {
-        let delta = diff.deltas().nth(delta_idx).unwrap();
-
+    for (delta_idx, delta) in diff.deltas().enumerate() {
         let path = delta
             .new_file()
             .path()

@@ -811,8 +811,7 @@ fn run(
                             .unwrap_or_else(|| oid[..7.min(oid.len())].to_string());
 
                         app.loading_message = Some(format!("Loading commit {}...", short_oid));
-                        let vis = tree.flatten(&app.collapsed);
-                        terminal.draw(|frame| ui::draw(frame, &app, &diff, &vis, &label, ss, theme, colors))?;
+                        terminal.draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
                         app.loading_message = None;
 
                         match git::get_commit_diff(repo, &oid) {
@@ -839,8 +838,7 @@ fn run(
                                 .unwrap_or_default();
 
                             app.loading_message = Some(format!("Loading PR #{}...", number));
-                            let vis = tree.flatten(&app.collapsed);
-                            terminal.draw(|frame| ui::draw(frame, &app, &diff, &vis, &label, ss, theme, colors))?;
+                            terminal.draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
                             app.loading_message = None;
 
                             match github::GitHubProvider::new(owner.clone(), repo_name.clone())
@@ -921,9 +919,14 @@ fn diff_content_eq(a: &model::Diff, b: &model::Diff) -> bool {
 
 /// Carry over `viewed` flags from the old diff to a new diff.
 fn transfer_viewed(old: &model::Diff, new: &mut model::Diff) {
+    let viewed: std::collections::HashMap<&str, bool> = old
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.viewed))
+        .collect();
     for file in &mut new.files {
-        if let Some(old_file) = old.files.iter().find(|f| f.path == file.path) {
-            file.viewed = old_file.viewed;
+        if let Some(&v) = viewed.get(file.path.as_str()) {
+            file.viewed = v;
         }
     }
 }

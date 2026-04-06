@@ -222,11 +222,10 @@ fn draw_file_diff(
     let is_focused = matches!(app.focus, Focus::Diff);
     let inner_height = area.height.saturating_sub(2) as usize; // subtract borders
 
-    // Build the set of match line indices for highlighting
-    let match_lines = app.search.as_ref().map(|s| {
+    // Get search match info from pre-computed state
+    let search_info = app.search.as_ref().map(|s| {
         let current_line = s.matches.get(s.current).map(|m| m.line_index);
-        let all: std::collections::HashSet<usize> = s.matches.iter().map(|m| m.line_index).collect();
-        (all, current_line)
+        (&s.match_lines, current_line)
     });
 
     let syntax = Path::new(&file.path)
@@ -269,7 +268,7 @@ fn draw_file_diff(
                 ),
             ];
 
-            if let Some((ref all, current)) = match_lines
+            if let Some((all, current)) = search_info
                 && all.contains(&line_index)
             {
                 let is_current = current == Some(line_index);
@@ -350,7 +349,7 @@ fn draw_file_diff(
                 }
 
                 // Apply search highlighting on matching lines
-                if let Some((ref all, current)) = match_lines
+                if let Some((all, current)) = search_info
                     && all.contains(&line_index)
                 {
                     let is_current = current == Some(line_index);
@@ -1261,10 +1260,9 @@ fn draw_file_diff_split(
 
     let rows = split::build_split_rows(&file.hunks);
 
-    let match_lines = app.search.as_ref().map(|s| {
+    let search_info = app.search.as_ref().map(|s| {
         let current_line = s.matches.get(s.current).map(|m| m.line_index);
-        let all: std::collections::HashSet<usize> = s.matches.iter().map(|m| m.line_index).collect();
-        (all, current_line)
+        (&s.match_lines, current_line)
     });
 
     let syntax = Path::new(&file.path)
@@ -1321,7 +1319,7 @@ fn draw_file_diff_split(
             continue;
         }
 
-        let search_bg = match_lines.as_ref().and_then(|(all, current)| {
+        let search_bg = search_info.as_ref().and_then(|(all, current)| {
             if all.contains(&row_idx) {
                 let is_current = *current == Some(row_idx);
                 Some(if is_current { colors.bg_search_current } else { colors.bg_search_match })
@@ -1470,8 +1468,7 @@ fn draw_file_diff_split(
     frame.render_widget(left_widget, left_area);
     frame.render_widget(right_widget, right_area);
 
-    let content_height = split::split_row_count(&file.hunks);
-    render_scrollbar(frame, right_area, app.scroll, content_height, inner_height, colors);
+    render_scrollbar(frame, right_area, app.scroll, rows.len(), inner_height, colors);
 }
 
 /// Format a single line number for the split-view gutter (4 chars + 1 space).
