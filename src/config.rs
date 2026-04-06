@@ -68,6 +68,8 @@ pub struct ColorsConfig {
     pub bg_inline_added: Color,
     #[serde(deserialize_with = "deserialize_hex_color")]
     pub bg_inline_removed: Color,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub bg_split_empty: Color,
 }
 
 impl Default for ColorsConfig {
@@ -89,6 +91,7 @@ impl Default for ColorsConfig {
             bg_search_current: Color::Rgb(180, 140, 20),
             bg_inline_added: Color::Rgb(40, 80, 40),
             bg_inline_removed: Color::Rgb(80, 40, 40),
+            bg_split_empty: Color::Rgb(25, 25, 30),
         }
     }
 }

@@ -1302,7 +1302,7 @@ fn draw_file_diff_split(
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
                 }
                 left_lines.push(Line::from(l_spans));
-                right_lines.push(Line::from(vec![]));
+                right_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
             }
             SplitRow::RightOnly(line) => {
                 let content = line.content.trim_end();
@@ -1312,7 +1312,7 @@ fn draw_file_diff_split(
                 if let Some(bg) = search_bg {
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
                 }
-                left_lines.push(Line::from(vec![]));
+                left_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
                 right_lines.push(Line::from(r_spans));
             }
         }
