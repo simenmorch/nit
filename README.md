@@ -4,8 +4,18 @@ A terminal-based code review tool built in Rust. Name comes from "nitpick" — t
 
 A GitHub-like "Files changed" experience in the terminal — structured, navigable, keyboard-driven.
 
-This is a dead simple tool. There are similar diff tools out there that are more feature rich and probably better for most people, but none of them worked for me. 
-I therefore built my own tool to fit my needs.
+This is first and foremost a diff/review tool. Although there are some git functionality, they are  mostly there for convenience. There are similar tools out there that are more feature rich and
+probably better for most people, but they did not really work for me, so I built my own tool to work exactly as I wanted it to.
+
+## Features
+
+- **File tree sidebar** with collapsible folders
+- **Switch between unified and side-by-side diff views** with syntax highlighting and character-level inline diffs
+- **Search** within diffs with match navigation
+- **GitHub PR browser** - browse and review the diff of any PR (includes state filters)
+- **Commit log browser** — browse and review the diff of any commit
+- **Git operations** — stage files, commit, switch branches, pull, push
+- **Configurable** — syntax themes, full color customization
 
 ## Usage
 
@@ -17,36 +27,69 @@ nit '#42'              # GitHub PR (current repo)
 nit owner/repo#42      # GitHub PR (any repo)
 ```
 
+GitHub PR mode requires a token: set `GITHUB_TOKEN` or have `gh` CLI authenticated.
+
 ## Keybindings
+
+Press `?` in-app to see the full help overlay.
 
 ### Global
 
-| Key       | Action                |
-|-----------|-----------------------|
-| `q`       | Quit                  |
-| `Tab`     | Toggle sidebar        |
-| `v`       | Toggle file as viewed |
-| `/`       | Search in diff        |
-| `n` / `N` | Next / previous match |
-| `gg`      | Jump to top           |
-| `G`       | Jump to bottom        |
+| Key | Action |
+|---|---|
+| `1` / `2` / `3` | Switch tab (Diff / Commits / PRs) |
+| `q` | Quit |
+| `?` | Toggle help |
+| `gg` / `G` | Jump to top / bottom |
 
-### Sidebar (file list)
+### Diff — Sidebar
 
-| Key            | Action              |
-|----------------|----------------------|
-| `j` / `Down`   | Next file            |
-| `k` / `Up`     | Previous file        |
-| `l` / `Enter`  | Focus diff view      |
+| Key | Action |
+|---|---|
+| `j` / `k` | Navigate files |
+| `l` / `Enter` | Open file / toggle folder |
+| `Space` | Fold / unfold folder |
+| `v` | Toggle viewed |
+| `V` | Mark viewed & next |
+| `Tab` | Focus diff panel |
 
-### Diff view
+### Diff — Panel
 
-| Key          | Action              |
-|--------------|----------------------|
-| `j` / `Down` | Scroll down          |
-| `k` / `Up`   | Scroll up            |
-| `h`          | Focus sidebar        |
-| `Esc`        | Clear search / focus sidebar |
+| Key | Action |
+|---|---|
+| `j` / `k` | Scroll up / down |
+| `Ctrl+d` / `Ctrl+u` | Half-page down / up |
+| `PageDown` / `PageUp` | Half-page down / up |
+| `Ctrl+n` / `Ctrl+p` | Next / prev hunk |
+| `]` / `[` | Next / prev file |
+| `h` | Focus sidebar |
+
+### Diff — Shared
+
+| Key | Action |
+|---|---|
+| `/` then `Enter` | Search in file |
+| `n` / `N` | Next / prev match |
+| `s` | Toggle unified / split view |
+| `Esc` | Clear search or go back |
+
+### Local repo (default mode)
+
+| Key | Action |
+|---|---|
+| `c` | Commit staged changes |
+| `b` | Switch branch |
+| `p` / `P` | Git pull / push |
+
+### Commits / PRs
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Navigate list |
+| `Ctrl+d` / `Ctrl+u` | Half-page down / up |
+| `Enter` | View diff |
+| `f` | Filter PRs (PRs tab) |
+| `Esc` | Return to list |
 
 ## Configuration
 
@@ -97,6 +140,9 @@ By default, nit uses your terminal's ANSI colors, so it will inherit whatever th
 | `fg_info` | magenta | Branch name |
 | `bg_added` | `#1E3C1E` | Added line background |
 | `bg_removed` | `#3C1E1E` | Removed line background |
+| `bg_inline_added` | `#285028` | Inline added highlight (split view) |
+| `bg_inline_removed` | `#502828` | Inline removed highlight (split view) |
+| `bg_split_empty` | `#19191E` | Empty side background (split view) |
 | `bg_search_match` | `#78641E` | Search match highlight |
 | `bg_search_current` | `#B48C14` | Current search match |
 
@@ -118,6 +164,9 @@ fg_accent = "#EBCB8B"
 fg_info = "#B48EAD"
 bg_added = "#1E3C1E"
 bg_removed = "#3C1E1E"
+bg_inline_added = "#285028"
+bg_inline_removed = "#502828"
+bg_split_empty = "#1E222A"
 bg_search_match = "#78641E"
 bg_search_current = "#B48C14"
 ```
