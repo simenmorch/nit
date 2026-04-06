@@ -237,10 +237,14 @@ fn draw_file_diff(
 
         // Hunk header
         if line_index >= vis_start {
-            let mut hunk_header_spans = vec![Span::styled(
-                hunk.header.trim_end().to_string(),
-                Style::default().fg(colors.fg_muted),
-            )];
+            let gutter = "         "; // 4 + 1 + 4 = 9 chars blank gutter
+            let mut hunk_header_spans = vec![
+                Span::styled(gutter, Style::default().fg(colors.fg_muted)),
+                Span::styled(
+                    hunk.header.trim_end().to_string(),
+                    Style::default().fg(colors.fg_muted),
+                ),
+            ];
 
             if let Some((ref all, current)) = match_lines
                 && all.contains(&line_index)
@@ -287,7 +291,19 @@ fn draw_file_diff(
                     prefix_style
                 };
 
-                let mut spans = vec![Span::styled(prefix, prefix_style)];
+                let old_str = match line.old_num {
+                    Some(n) => format!("{:>4}", n),
+                    None => "    ".to_string(),
+                };
+                let new_str = match line.new_num {
+                    Some(n) => format!("{:>4}", n),
+                    None => "    ".to_string(),
+                };
+                let gutter = format!("{}{} ", old_str, new_str);
+                let mut spans = vec![
+                    Span::styled(gutter, Style::default().fg(colors.fg_muted)),
+                    Span::styled(prefix, prefix_style),
+                ];
 
                 if let Ok(highlighted) = highlighter.highlight_line(content, ss) {
                     for (style, text) in highlighted {
@@ -1020,11 +1036,19 @@ fn draw_file_diff_split(
             }
         });
 
+        let gutter_style = Style::default().fg(colors.fg_muted);
+
         match row {
             SplitRow::HunkHeader(header) => {
                 let text = header.trim_end().to_string();
-                let mut left_spans = vec![Span::styled(text.clone(), Style::default().fg(colors.fg_muted))];
-                let mut right_spans = vec![Span::styled(text, Style::default().fg(colors.fg_muted))];
+                let mut left_spans = vec![
+                    Span::styled("     ", gutter_style),
+                    Span::styled(text.clone(), Style::default().fg(colors.fg_muted)),
+                ];
+                let mut right_spans = vec![
+                    Span::styled("     ", gutter_style),
+                    Span::styled(text, Style::default().fg(colors.fg_muted)),
+                ];
                 if let Some(bg) = search_bg {
                     left_spans = highlight_search_in_spans(left_spans, app, bg);
                     right_spans = highlight_search_in_spans(right_spans, app, bg);
@@ -1034,8 +1058,12 @@ fn draw_file_diff_split(
             }
             SplitRow::Context(line) => {
                 let content = line.content.trim_end();
+                let l_gutter = format_split_gutter(line.old_num);
+                let r_gutter = format_split_gutter(line.new_num);
                 let mut l_spans = build_syntax_spans(content, &mut left_hl, ss, None, " ", colors);
                 let mut r_spans = build_syntax_spans(content, &mut right_hl, ss, None, " ", colors);
+                l_spans.insert(0, Span::styled(l_gutter, gutter_style));
+                r_spans.insert(0, Span::styled(r_gutter, gutter_style));
                 if let Some(bg) = search_bg {
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
@@ -1046,12 +1074,17 @@ fn draw_file_diff_split(
             SplitRow::Paired { left, right, left_spans: l_inline, right_spans: r_inline } => {
                 let l_content = left.content.trim_end();
                 let r_content = right.content.trim_end();
+                let l_gutter = format_split_gutter(left.old_num);
+                let r_gutter = format_split_gutter(right.new_num);
 
                 let mut l_spans = build_syntax_spans(l_content, &mut left_hl, ss, Some(colors.bg_removed), "-", colors);
                 let mut r_spans = build_syntax_spans(r_content, &mut right_hl, ss, Some(colors.bg_added), "+", colors);
 
                 l_spans = apply_inline_highlight(l_spans, l_inline, colors.bg_inline_removed);
                 r_spans = apply_inline_highlight(r_spans, r_inline, colors.bg_inline_added);
+
+                l_spans.insert(0, Span::styled(l_gutter, gutter_style));
+                r_spans.insert(0, Span::styled(r_gutter, gutter_style));
 
                 if let Some(bg) = search_bg {
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
@@ -1062,7 +1095,9 @@ fn draw_file_diff_split(
             }
             SplitRow::LeftOnly(line) => {
                 let content = line.content.trim_end();
+                let l_gutter = format_split_gutter(line.old_num);
                 let mut l_spans = build_syntax_spans(content, &mut left_hl, ss, Some(colors.bg_removed), "-", colors);
+                l_spans.insert(0, Span::styled(l_gutter, gutter_style));
                 if let Some(bg) = search_bg {
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
                 }
@@ -1071,7 +1106,9 @@ fn draw_file_diff_split(
             }
             SplitRow::RightOnly(line) => {
                 let content = line.content.trim_end();
+                let r_gutter = format_split_gutter(line.new_num);
                 let mut r_spans = build_syntax_spans(content, &mut right_hl, ss, Some(colors.bg_added), "+", colors);
+                r_spans.insert(0, Span::styled(r_gutter, gutter_style));
                 if let Some(bg) = search_bg {
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
                 }
@@ -1112,6 +1149,14 @@ fn draw_file_diff_split(
 
     frame.render_widget(left_widget, left_area);
     frame.render_widget(right_widget, right_area);
+}
+
+/// Format a single line number for the split-view gutter (4 chars + 1 space).
+fn format_split_gutter(num: Option<usize>) -> String {
+    match num {
+        Some(n) => format!("{:>4} ", n),
+        None => "     ".to_string(),
+    }
 }
 
 /// Build syntax-highlighted spans for a single line with an optional diff background.
