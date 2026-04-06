@@ -253,6 +253,25 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
+    // Confirm modal intercepts all keys when open
+    if let Some(ref confirm) = app.confirm {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let action = confirm.action.clone();
+                app.confirm = None;
+                return match action {
+                    app::PendingAction::GitPull => KeyAction::GitPull,
+                    app::PendingAction::GitPush => KeyAction::GitPush,
+                };
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.confirm = None;
+            }
+            _ => {}
+        }
+        return KeyAction::Continue;
+    }
+
     // Help modal intercepts all keys when open
     if app.show_help {
         match key.code {
@@ -316,10 +335,20 @@ fn handle_key(
             return KeyAction::Continue;
         }
         KeyCode::Char('p') if matches!(app.view_context, app::ViewContext::Default) => {
-            return KeyAction::GitPull;
+            app.confirm = Some(app::ConfirmModal {
+                open: true,
+                message: "Pull from remote?".to_string(),
+                action: app::PendingAction::GitPull,
+            });
+            return KeyAction::Continue;
         }
         KeyCode::Char('P') if matches!(app.view_context, app::ViewContext::Default) => {
-            return KeyAction::GitPush;
+            app.confirm = Some(app::ConfirmModal {
+                open: true,
+                message: "Push to remote?".to_string(),
+                action: app::PendingAction::GitPush,
+            });
+            return KeyAction::Continue;
         }
         _ => {}
     }

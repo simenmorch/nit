@@ -86,6 +86,10 @@ pub fn draw(
         draw_help_modal(frame, area, colors);
     }
 
+    if let Some(ref confirm) = app.confirm {
+        draw_confirm_modal(frame, area, &confirm.message, colors);
+    }
+
     if let Some(ref msg) = app.loading_message {
         draw_loading_overlay(frame, outer[1], msg, colors);
     }
@@ -876,6 +880,36 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
     );
 
     frame.render_widget(modal, modal_area);
+}
+
+fn draw_confirm_modal(frame: &mut Frame, area: Rect, message: &str, colors: &ColorsConfig) {
+    let hint = "y: yes  n: no";
+    let text_width = message.len().max(hint.len()) as u16 + 6;
+    let modal_width = text_width.clamp(24, area.width.saturating_sub(4));
+    let modal_height: u16 = 4;
+
+    let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let bg = colors.bg.unwrap_or(Color::Black);
+
+    let lines = vec![
+        Line::from(Span::styled(message, Style::default().fg(colors.fg))),
+        Line::from(Span::styled(hint, Style::default().fg(colors.fg_muted))),
+    ];
+
+    frame.render_widget(Clear, modal_area);
+    let widget = Paragraph::new(lines)
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors.border_focused))
+                .style(Style::default().bg(bg)),
+        );
+
+    frame.render_widget(widget, modal_area);
 }
 
 fn draw_loading_overlay(frame: &mut Frame, area: Rect, message: &str, colors: &ColorsConfig) {

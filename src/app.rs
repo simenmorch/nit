@@ -84,6 +84,18 @@ pub enum CommitField {
     Description,
 }
 
+#[derive(Clone)]
+pub enum PendingAction {
+    GitPull,
+    GitPush,
+}
+
+pub struct ConfirmModal {
+    pub open: bool,
+    pub message: String,
+    pub action: PendingAction,
+}
+
 pub struct BranchModal {
     pub open: bool,
     pub selected: usize,
@@ -150,6 +162,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub show_help: bool,
     pub loading_message: Option<String>,
+    pub confirm: Option<ConfirmModal>,
 }
 
 impl Default for App {
@@ -191,6 +204,7 @@ impl App {
             status_message: None,
             show_help: false,
             loading_message: None,
+            confirm: None,
         }
     }
 
