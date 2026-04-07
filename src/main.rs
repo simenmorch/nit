@@ -8,7 +8,7 @@ use ratatui::DefaultTerminal;
 use syntect::parsing::SyntaxSet;
 
 use nit::{app, config, git, github, model, provider, tree, ui};
-use provider::ReviewProvider;
+use provider::RemoteProvider;
 
 #[derive(Parser)]
 #[command(name = "nit", about = "Terminal code review tool")]
@@ -348,7 +348,7 @@ fn handle_key(
             }
             return KeyAction::Continue;
         }
-        KeyCode::Char('p') if matches!(app.view_context, app::ViewContext::Default) => {
+        KeyCode::Char('p') if matches!(app.review_mode, app::ReviewMode::WorkingTree) => {
             app.confirm = Some(app::ConfirmModal {
                 open: true,
                 message: "Pull from remote?".to_string(),
@@ -356,7 +356,7 @@ fn handle_key(
             });
             return KeyAction::Continue;
         }
-        KeyCode::Char('P') if matches!(app.view_context, app::ViewContext::Default) => {
+        KeyCode::Char('P') if matches!(app.review_mode, app::ReviewMode::WorkingTree) => {
             app.confirm = Some(app::ConfirmModal {
                 open: true,
                 message: "Push to remote?".to_string(),
@@ -429,7 +429,7 @@ fn handle_diff_tab_key(
         }
         KeyCode::Char('v') => {
             let newly_viewed = app.toggle_viewed_entry(diff, visible);
-            if matches!(app.view_context, app::ViewContext::Default) {
+            if matches!(app.review_mode, app::ReviewMode::WorkingTree) {
                 for idx in newly_viewed {
                     let file = &diff.files[idx];
                     let deleted = matches!(file.status, model::FileStatus::Deleted);
@@ -440,7 +440,7 @@ fn handle_diff_tab_key(
         }
         KeyCode::Char('V') => {
             let idx = app.mark_viewed_and_next(diff, visible);
-            if matches!(app.view_context, app::ViewContext::Default) {
+            if matches!(app.review_mode, app::ReviewMode::WorkingTree) {
                 let file = &diff.files[idx];
                 let deleted = matches!(file.status, model::FileStatus::Deleted);
                 let _ = git::stage_file(repo, &file.path, deleted);
@@ -463,11 +463,11 @@ fn handle_diff_tab_key(
             app.toggle_view_mode();
             return KeyAction::Continue;
         }
-        KeyCode::Char('c') if matches!(app.view_context, app::ViewContext::Default) => {
+        KeyCode::Char('c') if matches!(app.review_mode, app::ReviewMode::WorkingTree) => {
             app.start_commit();
             return KeyAction::Continue;
         }
-        KeyCode::Char('b') if matches!(app.view_context, app::ViewContext::Default) => {
+        KeyCode::Char('b') if matches!(app.review_mode, app::ReviewMode::WorkingTree) => {
             if let Ok(branches) = git::list_branches_detailed(repo) {
                 let selected = branches.iter().position(|b| b.is_head).unwrap_or(0);
                 app.branch_modal.branches = branches;
@@ -491,7 +491,7 @@ fn handle_diff_tab_key(
             KeyCode::Esc => {
                 if app.search.is_some() {
                     app.clear_search();
-                } else if matches!(app.view_context, app::ViewContext::Commit { .. } | app::ViewContext::PullRequest { .. }) {
+                } else if matches!(app.review_mode, app::ReviewMode::Commit { .. } | app::ReviewMode::PullRequest { .. }) {
                     return KeyAction::ReturnToDefault;
                 }
             }
@@ -508,7 +508,7 @@ fn handle_diff_tab_key(
             KeyCode::Esc => {
                 if app.search.is_some() {
                     app.clear_search();
-                } else if matches!(app.view_context, app::ViewContext::Commit { .. } | app::ViewContext::PullRequest { .. }) {
+                } else if matches!(app.review_mode, app::ReviewMode::Commit { .. } | app::ReviewMode::PullRequest { .. }) {
                     return KeyAction::ReturnToDefault;
                 }
             }
@@ -690,7 +690,7 @@ fn run(
             if !event::poll(poll_timeout)? {
                 // Timeout — refresh uncommitted diff if in default view
                 if is_live
-                    && matches!(app.view_context, app::ViewContext::Default)
+                    && matches!(app.review_mode, app::ReviewMode::WorkingTree)
                     && let Ok(mut new_diff) = git::get_uncommitted_diff(repo)
                     && !diff_content_eq(&diff, &new_diff)
                 {
@@ -820,8 +820,8 @@ fn run(
                                 tree = tree::FileTree::from_files(&diff.files);
                                 label = format!("{} {}", short_oid, message);
                                 app.reset_diff_state();
-                                app.view_context =
-                                    app::ViewContext::Commit { short_oid, message, return_tab: app::Tab::Commits };
+                                app.review_mode =
+                                    app::ReviewMode::Commit { short_oid, message, return_tab: app::Tab::Commits };
                                 app.active_tab = app::Tab::Diff;
                             }
                             Err(e) => {
@@ -849,7 +849,7 @@ fn run(
                                     tree = tree::FileTree::from_files(&diff.files);
                                     label = format!("#{} {}", number, title);
                                     app.reset_diff_state();
-                                    app.view_context = app::ViewContext::PullRequest {
+                                    app.review_mode = app::ReviewMode::PullRequest {
                                         number,
                                         title,
                                         return_tab: app::Tab::PRs,
@@ -864,16 +864,16 @@ fn run(
                         break;
                     }
                     KeyAction::ReturnToDefault => {
-                        let return_tab = match &app.view_context {
-                            app::ViewContext::Commit { return_tab, .. }
-                            | app::ViewContext::PullRequest { return_tab, .. } => *return_tab,
+                        let return_tab = match &app.review_mode {
+                            app::ReviewMode::Commit { return_tab, .. }
+                            | app::ReviewMode::PullRequest { return_tab, .. } => *return_tab,
                             _ => app::Tab::Diff,
                         };
                         diff = original_diff.clone();
                         label = original_label.clone();
                         tree = tree::FileTree::from_files(&diff.files);
                         app.reset_diff_state();
-                        app.view_context = app::ViewContext::Default;
+                        app.review_mode = app::ReviewMode::WorkingTree;
                         app.active_tab = return_tab;
                         break;
                     }

@@ -65,8 +65,8 @@ pub enum Tab {
 }
 
 #[derive(Clone)]
-pub enum ViewContext {
-    Default,
+pub enum ReviewMode {
+    WorkingTree,
     Commit { short_oid: String, message: String, return_tab: Tab },
     PullRequest { number: u64, title: String, return_tab: Tab },
 }
@@ -178,7 +178,7 @@ pub struct App {
     pub pr_selected: usize,
     pub pr_scroll: usize,
     pub pr_filter: PrFilter,
-    pub view_context: ViewContext,
+    pub review_mode: ReviewMode,
     pub branch_modal: BranchModal,
     pub status_message: Option<String>,
     pub show_help: bool,
@@ -220,7 +220,7 @@ impl App {
             pr_selected: 0,
             pr_scroll: 0,
             pr_filter: PrFilter::new(),
-            view_context: ViewContext::Default,
+            review_mode: ReviewMode::WorkingTree,
             branch_modal: BranchModal::new(),
             status_message: None,
             show_help: false,

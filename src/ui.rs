@@ -9,7 +9,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
 
-use crate::app::{App, DiffViewMode, Focus, Tab, ViewContext};
+use crate::app::{App, DiffViewMode, Focus, Tab, ReviewMode};
 use crate::config::ColorsConfig;
 use crate::model;
 use crate::split::{self, SplitRow, InlineSpan};
@@ -549,10 +549,10 @@ fn wrap_line_spans(
 }
 
 fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
-    let diff_label = match &app.view_context {
-        ViewContext::Default => "Diff".to_string(),
-        ViewContext::Commit { short_oid, .. } => format!("Diff ({})", short_oid),
-        ViewContext::PullRequest { number, .. } => format!("Diff (#{})", number),
+    let diff_label = match &app.review_mode {
+        ReviewMode::WorkingTree => "Diff".to_string(),
+        ReviewMode::Commit { short_oid, .. } => format!("Diff ({})", short_oid),
+        ReviewMode::PullRequest { number, .. } => format!("Diff (#{})", number),
     };
 
     let active_style = Style::default()
@@ -1194,7 +1194,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         String::new()
     };
 
-    let in_subview = matches!(app.view_context, ViewContext::Commit { .. } | ViewContext::PullRequest { .. });
+    let in_subview = matches!(app.review_mode, ReviewMode::Commit { .. } | ReviewMode::PullRequest { .. });
     let hints = if app.search.is_some() && in_subview {
         "Esc: clear search  ?: help  q: quit"
     } else if in_subview {

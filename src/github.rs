@@ -11,7 +11,7 @@ use octocrab::Octocrab;
 use tokio::runtime::Runtime;
 
 use crate::model;
-use crate::provider::{self, ReviewProvider};
+use crate::provider::{self, RemoteProvider};
 
 pub struct GitHubProvider {
     owner: String,
@@ -64,7 +64,7 @@ fn resolve_token() -> Result<String> {
     bail!("no GitHub token found. Set GITHUB_TOKEN or run `gh auth login`")
 }
 
-impl ReviewProvider for GitHubProvider {
+impl RemoteProvider for GitHubProvider {
     fn fetch_authenticated_user(&self) -> Result<String> {
         self.rt.block_on(async {
             let user = self.client.current().user().await.context("failed to fetch authenticated user")?;

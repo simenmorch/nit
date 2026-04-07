@@ -27,7 +27,7 @@ pub struct PrMetadata {
     pub head_branch: String,
 }
 
-pub trait ReviewProvider {
+pub trait RemoteProvider {
     /// Fetch the diff for a pull/merge request.
     fn fetch_diff(&self, pr_id: &str) -> Result<model::Diff>;
 
