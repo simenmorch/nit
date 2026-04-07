@@ -558,6 +558,9 @@ fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: us
                 return KeyAction::LoadCommitDiff(commit.oid.clone());
             }
         }
+        KeyCode::Esc => {
+            app.switch_tab(app::Tab::Diff);
+        }
         _ => {}
     }
     KeyAction::Continue
@@ -629,6 +632,9 @@ fn handle_prs_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize)
             if let Some(pr) = filtered.get(app.pr_selected) {
                 return KeyAction::LoadPrDiff(pr.number);
             }
+        }
+        KeyCode::Esc => {
+            app.switch_tab(app::Tab::Diff);
         }
         _ => {}
     }
