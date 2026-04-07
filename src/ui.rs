@@ -549,11 +549,7 @@ fn wrap_line_spans(
 }
 
 fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
-    let diff_label = match &app.review_mode {
-        ReviewMode::WorkingTree => "Diff".to_string(),
-        ReviewMode::Commit { short_oid, .. } => format!("Diff ({})", short_oid),
-        ReviewMode::PullRequest { number, .. } => format!("Diff (#{})", number),
-    };
+    let diff_label = "Diff";
 
     let active_style = Style::default()
         .fg(colors.fg_selected)
@@ -579,7 +575,7 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig)
 
     let key_style = Style::default().fg(colors.fg_muted);
 
-    let tabs = Line::from(vec![
+    let mut spans = vec![
         Span::raw(" "),
         Span::styled("1 ", key_style),
         Span::styled(diff_label, diff_style),
@@ -589,9 +585,29 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig)
         Span::styled(" │ ", sep_style),
         Span::styled("3 ", key_style),
         Span::styled("PRs", prs_style),
-    ]);
+    ];
 
-    frame.render_widget(Paragraph::new(tabs), area);
+    match &app.review_mode {
+        ReviewMode::WorkingTree => {}
+        ReviewMode::Commit { short_oid, .. } => {
+            let badge_style = Style::default()
+                .fg(Color::Black)
+                .bg(colors.fg_accent)
+                .add_modifier(Modifier::BOLD);
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(format!(" COMMIT {} ", short_oid), badge_style));
+        }
+        ReviewMode::PullRequest { number, .. } => {
+            let badge_style = Style::default()
+                .fg(Color::Black)
+                .bg(colors.fg_info)
+                .add_modifier(Modifier::BOLD);
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(format!(" PR #{} ", number), badge_style));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_commit_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
