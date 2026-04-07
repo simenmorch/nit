@@ -625,11 +625,11 @@ impl App {
         }
     }
 
-    pub fn next_hunk(&mut self, diff: &crate::model::Diff) {
+    pub fn next_hunk(&mut self, diff: &crate::model::Diff, cache: &crate::cache::DiffCache) {
         let Some(file) = diff.files.get(self.selected_file) else {
             return;
         };
-        let hunk_starts = self.hunk_starts(&file.hunks);
+        let hunk_starts = self.hunk_starts(&file.hunks, cache);
         for &start in &hunk_starts {
             if start > self.scroll {
                 self.scroll = start;
@@ -638,11 +638,11 @@ impl App {
         }
     }
 
-    pub fn prev_hunk(&mut self, diff: &crate::model::Diff) {
+    pub fn prev_hunk(&mut self, diff: &crate::model::Diff, cache: &crate::cache::DiffCache) {
         let Some(file) = diff.files.get(self.selected_file) else {
             return;
         };
-        let hunk_starts = self.hunk_starts(&file.hunks);
+        let hunk_starts = self.hunk_starts(&file.hunks, cache);
         for &start in hunk_starts.iter().rev() {
             if start < self.scroll {
                 self.scroll = start;
@@ -779,7 +779,7 @@ impl App {
         self.search = None;
     }
 
-    fn hunk_starts(&self, hunks: &[crate::model::Hunk]) -> Vec<usize> {
+    fn hunk_starts(&self, hunks: &[crate::model::Hunk], cache: &crate::cache::DiffCache) -> Vec<usize> {
         match self.view_mode {
             DiffViewMode::Unified => {
                 let mut starts = Vec::new();
@@ -790,7 +790,7 @@ impl App {
                 }
                 starts
             }
-            DiffViewMode::SideBySide => crate::split::hunk_start_rows(hunks),
+            DiffViewMode::SideBySide => cache.hunk_start_rows(self.selected_file).to_vec(),
         }
     }
 }
@@ -1235,7 +1235,8 @@ mod tests {
             ],
         )]);
         let mut app = App::new();
-        app.next_hunk(&diff);
+        let cache = crate::cache::DiffCache::new(&diff);
+        app.next_hunk(&diff, &cache);
         // First hunk is at line_index 0, has 1 header + 2 lines = 3 total
         // Second hunk starts at line_index 3
         assert_eq!(app.scroll, 3);
@@ -1612,8 +1613,9 @@ mod tests {
             ],
         )]);
         let mut app = App::new();
+        let cache = crate::cache::DiffCache::new(&diff);
         app.scroll = 3; // at second hunk
-        app.prev_hunk(&diff);
+        app.prev_hunk(&diff, &cache);
         assert_eq!(app.scroll, 0); // back to first
     }
 }

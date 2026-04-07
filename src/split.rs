@@ -162,21 +162,57 @@ fn char_offset_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
+/// Precomputed split-view metadata for a file.
+/// Avoids rebuilding full split rows (with expensive inline diffs) just for counts.
+pub struct SplitMeta {
+    pub row_count: usize,
+    pub hunk_starts: Vec<usize>,
+}
+
+/// Compute split-view metadata without running character-level diffs.
+/// Walks the hunk structure to count rows and record hunk start indices.
+pub fn compute_split_meta(hunks: &[Hunk]) -> SplitMeta {
+    let mut row_count: usize = 0;
+    let mut hunk_starts = Vec::new();
+
+    for hunk in hunks {
+        hunk_starts.push(row_count);
+        row_count += 1; // hunk header
+
+        let mut removed: usize = 0;
+        let mut added: usize = 0;
+
+        for line in &hunk.lines {
+            match line.kind {
+                LineKind::Removed => removed += 1,
+                LineKind::Added => added += 1,
+                LineKind::Context => {
+                    // Flush pending removed/added as paired + leftover
+                    row_count += removed.max(added);
+                    removed = 0;
+                    added = 0;
+                    row_count += 1; // context line
+                }
+            }
+        }
+        // Flush trailing removed/added
+        row_count += removed.max(added);
+    }
+
+    SplitMeta {
+        row_count,
+        hunk_starts,
+    }
+}
+
 /// Count total rows in side-by-side mode for scroll bounds.
 pub fn split_row_count(hunks: &[Hunk]) -> usize {
-    build_split_rows(hunks).len()
+    compute_split_meta(hunks).row_count
 }
 
 /// Compute the starting row index of each hunk in side-by-side mode.
 pub fn hunk_start_rows(hunks: &[Hunk]) -> Vec<usize> {
-    let rows = build_split_rows(hunks);
-    let mut starts = Vec::new();
-    for (i, row) in rows.iter().enumerate() {
-        if matches!(row, SplitRow::HunkHeader(_)) {
-            starts.push(i);
-        }
-    }
-    starts
+    compute_split_meta(hunks).hunk_starts
 }
 
 #[cfg(test)]

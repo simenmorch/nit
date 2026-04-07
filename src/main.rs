@@ -7,7 +7,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 use syntect::parsing::SyntaxSet;
 
-use nit::{app, config, git, github, model, provider, tree, ui};
+use nit::{app, cache, config, git, github, model, provider, tree, ui};
 use provider::RemoteProvider;
 
 #[derive(Parser)]
@@ -118,6 +118,7 @@ enum KeyAction {
     GitPush,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_key(
     key: KeyEvent,
     app: &mut app::App,
@@ -126,6 +127,7 @@ fn handle_key(
     content_height: usize,
     viewport_height: usize,
     repo: &git2::Repository,
+    diff_cache: &cache::DiffCache,
 ) -> KeyAction {
     // Clear status message on any keypress
     app.status_message = None;
@@ -370,13 +372,14 @@ fn handle_key(
     // Tab-specific dispatch
     match app.active_tab {
         app::Tab::Diff => {
-            handle_diff_tab_key(key, app, diff, visible, content_height, viewport_height, repo)
+            handle_diff_tab_key(key, app, diff, visible, content_height, viewport_height, repo, diff_cache)
         }
         app::Tab::Commits => handle_commits_tab_key(key, app, viewport_height),
         app::Tab::PRs => handle_prs_tab_key(key, app, viewport_height),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_diff_tab_key(
     key: KeyEvent,
     app: &mut app::App,
@@ -385,6 +388,7 @@ fn handle_diff_tab_key(
     content_height: usize,
     viewport_height: usize,
     repo: &git2::Repository,
+    diff_cache: &cache::DiffCache,
 ) -> KeyAction {
     // Ctrl-modified keys
     match key.code {
@@ -410,11 +414,11 @@ fn handle_diff_tab_key(
                 return KeyAction::Continue;
             }
             KeyCode::Char('n') => {
-                app.next_hunk(diff);
+                app.next_hunk(diff, diff_cache);
                 return KeyAction::Continue;
             }
             KeyCode::Char('p') => {
-                app.prev_hunk(diff);
+                app.prev_hunk(diff, diff_cache);
                 return KeyAction::Continue;
             }
             _ => {}
@@ -654,6 +658,7 @@ fn run(
 
     let mut original_diff = diff.clone();
     let original_label = label.clone();
+    let mut diff_cache = cache::DiffCache::new(&diff);
 
     loop {
         let visible = tree.flatten(&app.collapsed);
@@ -681,11 +686,8 @@ fn run(
 
         let mut visible = visible;
         loop {
-            let content_height = diff
-                .files
-                .get(app.selected_file)
-                .map(|f| ui::diff_line_count(f, app.view_mode))
-                .unwrap_or(0);
+            let content_height =
+                diff_cache.diff_line_count(app.selected_file, &diff, app.view_mode);
 
             if !event::poll(poll_timeout)? {
                 // Timeout — refresh uncommitted diff if in default view
@@ -705,6 +707,7 @@ fn run(
                     }
                     diff = new_diff;
                     tree = tree::FileTree::from_files(&diff.files);
+                    diff_cache = cache::DiffCache::new(&diff);
                     original_diff = diff.clone();
                     if !diff.files.is_empty() && app.selected_file >= diff.files.len() {
                         app.selected_file = diff.files.len() - 1;
@@ -722,6 +725,7 @@ fn run(
                     content_height,
                     viewport_height,
                     repo,
+                    &diff_cache,
                 ) {
                     KeyAction::Quit => return Ok(()),
                     KeyAction::CheckoutBranch(name) => {
@@ -736,6 +740,7 @@ fn run(
                                 }
                                 diff = new_diff;
                                 tree = tree::FileTree::from_files(&diff.files);
+                                diff_cache = cache::DiffCache::new(&diff);
                                 original_diff = diff.clone();
                                 app.reset_diff_state();
                             }
@@ -761,6 +766,7 @@ fn run(
                                     }
                                     diff = new_diff;
                                     tree = tree::FileTree::from_files(&diff.files);
+                                    diff_cache = cache::DiffCache::new(&diff);
                                     original_diff = diff.clone();
                                 }
                                 // Refresh commit log
@@ -793,6 +799,7 @@ fn run(
                         if let Ok(new_diff) = git::get_uncommitted_diff(repo) {
                             diff = new_diff;
                             tree = tree::FileTree::from_files(&diff.files);
+                            diff_cache = cache::DiffCache::new(&diff);
                             original_diff = diff.clone();
                             app.reset_diff_state();
                         }
@@ -818,6 +825,7 @@ fn run(
                             Ok(new_diff) => {
                                 diff = new_diff;
                                 tree = tree::FileTree::from_files(&diff.files);
+                                diff_cache = cache::DiffCache::new(&diff);
                                 label = format!("{} {}", short_oid, message);
                                 app.reset_diff_state();
                                 app.review_mode =
@@ -847,6 +855,7 @@ fn run(
                                 Ok(new_diff) => {
                                     diff = new_diff;
                                     tree = tree::FileTree::from_files(&diff.files);
+                                    diff_cache = cache::DiffCache::new(&diff);
                                     label = format!("#{} {}", number, title);
                                     app.reset_diff_state();
                                     app.review_mode = app::ReviewMode::PullRequest {
@@ -872,6 +881,7 @@ fn run(
                         diff = original_diff.clone();
                         label = original_label.clone();
                         tree = tree::FileTree::from_files(&diff.files);
+                        diff_cache = cache::DiffCache::new(&diff);
                         app.reset_diff_state();
                         app.review_mode = app::ReviewMode::WorkingTree;
                         app.active_tab = return_tab;
