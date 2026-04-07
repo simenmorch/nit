@@ -350,7 +350,7 @@ fn handle_key(
             }
             return KeyAction::Continue;
         }
-        KeyCode::Char('p') if matches!(app.review_mode, app::ReviewMode::WorkingTree) => {
+        KeyCode::Char('p') if matches!(app.review_mode, app::ReviewMode::WorkingTree) && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.confirm = Some(app::ConfirmModal {
                 open: true,
                 message: "Pull from remote?".to_string(),
