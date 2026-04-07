@@ -26,6 +26,8 @@ Terminal-based code review tool. Tabbed TUI with three tabs: Diff (file tree sid
 CLI (clap) → Provider (git2 local | GitHub API) → Diff model → TUI (ratatui)
 ```
 
+See [docs/ubiquitous-language.md](docs/ubiquitous-language.md) for definitions of key domain terms used throughout the codebase.
+
 **Data flow:** `main.rs` parses the CLI arg to determine the diff source, fetches the diff into a `model::Diff` (a tree: files → hunks → lines), then enters the ratatui event loop. `App` owns all mutable UI state; `ui::draw()` reads it without mutation. In default (uncommitted) mode, the diff auto-refreshes every 2 seconds.
 
 **Key abstraction — `RemoteProvider` trait** (`provider.rs`): Defines `fetch_diff`, `fetch_comments`, `fetch_metadata`, `fetch_pr_list`, `fetch_authenticated_user`. Currently implemented by `GitHubProvider`. Local git diffs bypass the trait and use `git.rs` functions directly. Future providers (GitLab, etc.) implement this trait.
