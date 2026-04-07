@@ -464,7 +464,7 @@ fn handle_diff_tab_key(
             return KeyAction::Continue;
         }
         KeyCode::Char('s') => {
-            app.toggle_view_mode();
+            app.toggle_view_mode(diff, diff_cache);
             return KeyAction::Continue;
         }
         KeyCode::Char('c') if matches!(app.review_mode, app::ReviewMode::WorkingTree) => {

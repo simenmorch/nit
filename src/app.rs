@@ -429,12 +429,30 @@ impl App {
         }
     }
 
-    pub fn toggle_view_mode(&mut self) {
-        self.view_mode = match self.view_mode {
+    pub fn toggle_view_mode(
+        &mut self,
+        diff: &model::Diff,
+        cache: &crate::cache::DiffCache,
+    ) {
+        let old_mode = self.view_mode;
+        self.view_mode = match old_mode {
             DiffViewMode::Unified => DiffViewMode::SideBySide,
             DiffViewMode::SideBySide => DiffViewMode::Unified,
         };
-        self.scroll = 0;
+
+        // Map scroll position from old view to new view
+        if let Some(file) = diff.files.get(self.selected_file) {
+            let unified_starts = unified_hunk_starts(&file.hunks);
+            let split_starts = cache.hunk_start_rows(self.selected_file);
+
+            let (from_starts, to_starts) = match old_mode {
+                DiffViewMode::Unified => (unified_starts.as_slice(), split_starts),
+                DiffViewMode::SideBySide => (split_starts, unified_starts.as_slice()),
+            };
+
+            self.scroll = map_scroll(self.scroll, from_starts, to_starts);
+        }
+
         match self.view_mode {
             DiffViewMode::SideBySide => {
                 self.show_sidebar = false;
@@ -781,18 +799,58 @@ impl App {
 
     fn hunk_starts(&self, hunks: &[crate::model::Hunk], cache: &crate::cache::DiffCache) -> Vec<usize> {
         match self.view_mode {
-            DiffViewMode::Unified => {
-                let mut starts = Vec::new();
-                let mut idx: usize = 0;
-                for hunk in hunks {
-                    starts.push(idx);
-                    idx += 1 + hunk.lines.len();
-                }
-                starts
-            }
+            DiffViewMode::Unified => unified_hunk_starts(hunks),
             DiffViewMode::SideBySide => cache.hunk_start_rows(self.selected_file).to_vec(),
         }
     }
+}
+
+fn unified_hunk_starts(hunks: &[crate::model::Hunk]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut idx: usize = 0;
+    for hunk in hunks {
+        starts.push(idx);
+        idx += 1 + hunk.lines.len();
+    }
+    starts
+}
+
+/// Map a scroll position from one view's coordinate space to another,
+/// using each view's hunk start positions. Preserves proportional offset
+/// within the containing hunk.
+fn map_scroll(scroll: usize, from_starts: &[usize], to_starts: &[usize]) -> usize {
+    if from_starts.is_empty() || to_starts.is_empty() {
+        return 0;
+    }
+
+    // Find which hunk contains the scroll position
+    let hunk_idx = match from_starts.binary_search(&scroll) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+
+    let from_hunk_start = from_starts[hunk_idx];
+    let from_hunk_end = from_starts
+        .get(hunk_idx + 1)
+        .copied()
+        .unwrap_or(from_hunk_start + 1);
+    let from_hunk_len = from_hunk_end - from_hunk_start;
+
+    let to_hunk_start = to_starts.get(hunk_idx).copied().unwrap_or(0);
+    let to_hunk_end = to_starts
+        .get(hunk_idx + 1)
+        .copied()
+        .unwrap_or(to_hunk_start + 1);
+    let to_hunk_len = to_hunk_end - to_hunk_start;
+
+    let offset_in_hunk = scroll - from_hunk_start;
+    let mapped_offset = if from_hunk_len > 0 {
+        offset_in_hunk * to_hunk_len / from_hunk_len
+    } else {
+        0
+    };
+
+    to_hunk_start + mapped_offset
 }
 
 #[cfg(test)]
@@ -1617,5 +1675,37 @@ mod tests {
         app.scroll = 3; // at second hunk
         app.prev_hunk(&diff, &cache);
         assert_eq!(app.scroll, 0); // back to first
+    }
+
+    // ── map_scroll ──
+
+    #[test]
+    fn map_scroll_at_hunk_boundary() {
+        let from = &[0, 10, 20];
+        let to = &[0, 5, 15];
+        assert_eq!(map_scroll(0, from, to), 0);
+        assert_eq!(map_scroll(10, from, to), 5);
+        assert_eq!(map_scroll(20, from, to), 15);
+    }
+
+    #[test]
+    fn map_scroll_proportional_within_hunk() {
+        // Hunk 0: from rows 0..10, to rows 0..5
+        let from = &[0, 10];
+        let to = &[0, 5];
+        assert_eq!(map_scroll(5, from, to), 2); // 5/10 * 5 = 2
+    }
+
+    #[test]
+    fn map_scroll_empty_starts() {
+        assert_eq!(map_scroll(5, &[], &[0, 10]), 0);
+        assert_eq!(map_scroll(5, &[0, 10], &[]), 0);
+    }
+
+    #[test]
+    fn map_scroll_single_hunk() {
+        let from = &[0];
+        let to = &[0];
+        assert_eq!(map_scroll(0, from, to), 0);
     }
 }
