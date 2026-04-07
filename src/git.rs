@@ -244,6 +244,8 @@ pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
 
     let mut opts = DiffOptions::new();
     opts.context_lines(5);
+    opts.include_untracked(true);
+    opts.recurse_untracked_dirs(true);
 
     let diff = repo
         .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
