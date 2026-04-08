@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 use crate::app::{App, DiffViewMode, Focus, Tab, ReviewMode};
 use crate::config::ColorsConfig;
@@ -16,6 +16,23 @@ use crate::split::{self, SplitRow, InlineSpan};
 use crate::tree::{FlatEntry, FlatEntryKind};
 
 const SIDEBAR_WIDTH: u16 = 40;
+
+/// Look up the syntax definition for a file path.
+/// For PHP files, uses "PHP Source" (pure PHP mode) instead of "PHP" (HTML+PHP)
+/// so that diff hunks highlight correctly without needing a `<?php` opening tag.
+fn syntax_for_file<'a>(path: &str, ss: &'a SyntaxSet) -> &'a SyntaxReference {
+    let syntax = Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| ss.find_syntax_by_extension(ext))
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+    if syntax.name == "PHP" {
+        ss.find_syntax_by_name("PHP Source").unwrap_or(syntax)
+    } else {
+        syntax
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
@@ -228,11 +245,7 @@ fn draw_file_diff(
         (&s.match_lines, current_line)
     });
 
-    let syntax = Path::new(&file.path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .and_then(|ext| ss.find_syntax_by_extension(ext))
-        .unwrap_or_else(|| ss.find_syntax_plain_text());
+    let syntax = syntax_for_file(&file.path, ss);
 
     let vis_start = app.scroll;
     // Build extra lines to compensate for wrapping pushing content down
@@ -1282,11 +1295,7 @@ fn draw_file_diff_split(
         (&s.match_lines, current_line)
     });
 
-    let syntax = Path::new(&file.path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .and_then(|ext| ss.find_syntax_by_extension(ext))
-        .unwrap_or_else(|| ss.find_syntax_plain_text());
+    let syntax = syntax_for_file(&file.path, ss);
 
     let vis_start = app.scroll;
     // Build extra lines to compensate for wrapping pushing content down
