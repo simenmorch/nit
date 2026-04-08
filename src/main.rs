@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 //test
 
@@ -116,6 +117,7 @@ enum KeyAction {
     ReturnToDefault,
     GitPull,
     GitPush,
+    OpenInEditor(PathBuf, Option<usize>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -421,6 +423,16 @@ fn handle_diff_tab_key(
                 app.prev_hunk(diff, diff_cache);
                 return KeyAction::Continue;
             }
+            KeyCode::Char('e') => {
+                if let Some(file) = diff.files.get(app.selected_file)
+                    && let Some(workdir) = repo.workdir()
+                {
+                    let full_path = workdir.join(&file.path);
+                    let line_num = resolve_line_number(app, file);
+                    return KeyAction::OpenInEditor(full_path, line_num);
+                }
+                return KeyAction::Continue;
+            }
             _ => {}
         }
     }
@@ -521,6 +533,45 @@ fn handle_diff_tab_key(
     }
 
     KeyAction::Continue
+}
+
+fn resolve_line_number(app: &app::App, file: &model::DiffFile) -> Option<usize> {
+    if matches!(app.focus, app::Focus::Sidebar) {
+        // When focused on sidebar, just open at line 1
+        return file.hunks.first()
+            .and_then(|h| h.lines.first())
+            .and_then(|l| l.new_num);
+    }
+    match app.view_mode {
+        app::DiffViewMode::Unified => {
+            let mut idx: usize = 0;
+            for hunk in &file.hunks {
+                if idx == app.scroll {
+                    return hunk.lines.first().and_then(|l| l.new_num.or(l.old_num));
+                }
+                idx += 1;
+                for line in &hunk.lines {
+                    if idx == app.scroll {
+                        return line.new_num.or(line.old_num);
+                    }
+                    idx += 1;
+                }
+            }
+            None
+        }
+        app::DiffViewMode::SideBySide => {
+            use nit::split::{self, SplitRow};
+            let rows = split::build_split_rows(&file.hunks);
+            match rows.get(app.scroll) {
+                Some(SplitRow::HunkHeader(_)) => None,
+                Some(SplitRow::Context(line)) => line.new_num.or(line.old_num),
+                Some(SplitRow::Paired { right, .. }) => right.new_num,
+                Some(SplitRow::LeftOnly(line)) => line.old_num,
+                Some(SplitRow::RightOnly(line)) => line.new_num,
+                None => None,
+            }
+        }
+    }
 }
 
 fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize) -> KeyAction {
@@ -795,6 +846,33 @@ fn run(
                                 app.status_message = Some(format!("Push failed: {}", e));
                             }
                         }
+                        break;
+                    }
+                    KeyAction::OpenInEditor(path, line_num) => {
+                        ratatui::restore();
+                        let editor = std::env::var("EDITOR")
+                            .or_else(|_| std::env::var("VISUAL"))
+                            .unwrap_or_else(|_| "vi".into());
+                        let mut cmd = std::process::Command::new(&editor);
+                        if let Some(n) = line_num {
+                            cmd.arg(format!("+{}", n));
+                        }
+                        cmd.arg(&path);
+                        match cmd.status() {
+                            Ok(status) => {
+                                if !status.success() {
+                                    app.status_message = Some(format!(
+                                        "Editor exited with: {}", status
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                app.status_message = Some(format!(
+                                    "Failed to launch '{}': {}", editor, e
+                                ));
+                            }
+                        }
+                        *terminal = ratatui::init();
                         break;
                     }
                     KeyAction::Commit(msg) => {

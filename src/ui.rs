@@ -992,6 +992,7 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
             ("/ → Enter", "Search in file"),
             ("n / N", "Next / prev match"),
             ("s", "Toggle unified / split view"),
+            ("Ctrl+e", "Open in $EDITOR"),
             ("Esc", "Clear search or go back"),
         ]),
         ("Local repo", &[
