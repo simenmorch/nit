@@ -64,19 +64,6 @@ fn main() -> Result<()> {
     let commits = git::get_commit_log(&repo, 500).unwrap_or_default();
 
     let github_remote = git::owner_repo_from_remote(&repo).ok();
-    let (prs, github_user) = match &github_remote {
-        Some((owner, repo_name)) => {
-            match github::GitHubProvider::new(owner.clone(), repo_name.clone()) {
-                Ok(provider) => {
-                    let prs = provider.fetch_pr_list(100).unwrap_or_default();
-                    let user = provider.fetch_authenticated_user().ok();
-                    (prs, user)
-                }
-                Err(_) => (Vec::new(), None),
-            }
-        }
-        None => (Vec::new(), None),
-    };
 
     let cfg = config::load()?;
 
@@ -95,9 +82,7 @@ fn main() -> Result<()> {
         &repo,
         is_live,
         commits,
-        prs,
         github_remote,
-        github_user,
         &ss,
         &theme,
         &cfg.colors,
@@ -733,17 +718,13 @@ fn run(
     repo: &git2::Repository,
     is_live: bool,
     commits: Vec<model::CommitInfo>,
-    prs: Vec<model::PrInfo>,
     github_remote: Option<(String, String)>,
-    github_user: Option<String>,
     ss: &SyntaxSet,
     theme: &syntect::highlighting::Theme,
     colors: &config::ColorsConfig,
 ) -> Result<()> {
     let mut app = app::App::new();
     app.commits = commits;
-    app.prs = prs;
-    app.pr_filter.github_user = github_user;
 
     let mut original_diff = diff.clone();
     let original_label = label.clone();
@@ -1004,6 +985,38 @@ fn run(
                         break;
                     }
                     KeyAction::Continue => {}
+                }
+
+                // Lazy-load PRs on first entry to the PR tab
+                if app.active_tab == app::Tab::PRs && !app.prs_loaded {
+                    app.prs_loaded = true;
+                    if let Some((owner, repo_name)) = github_remote.clone() {
+                        app.loading_message = Some("Loading PRs...".to_string());
+                        terminal.draw(|frame| {
+                            ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors)
+                        })?;
+                        app.loading_message = None;
+
+                        match github::GitHubProvider::new(owner, repo_name) {
+                            Ok(provider) => match provider.fetch_pr_list(100) {
+                                Ok(prs) => {
+                                    app.prs = prs;
+                                    if let Ok(user) = provider.fetch_authenticated_user() {
+                                        app.pr_filter.github_user = Some(user);
+                                    }
+                                }
+                                Err(e) => {
+                                    app.status_message =
+                                        Some(format!("Failed to load PRs: {}", e));
+                                }
+                            },
+                            Err(e) => {
+                                app.status_message =
+                                    Some(format!("GitHub setup failed: {}", e));
+                            }
+                        }
+                        break;
+                    }
                 }
             }
 
