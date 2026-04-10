@@ -989,19 +989,20 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
         ("Diff — Sidebar", &[
             ("j / k", "Navigate files"),
             ("l / Enter", "Open file / toggle folder"),
-            ("Space", "Fold / unfold folder"),
-            ("v", "Toggle viewed"),
-            ("V", "Mark viewed & next"),
             ("Tab", "Focus diff panel"),
         ]),
         ("Diff — Panel", &[
             ("j / k", "Scroll up / down"),
             ("Ctrl+d / u", "Half-page down / up"),
-            ("Ctrl+n / p", "Next / prev hunk"),
-            ("] / [", "Next / prev file"),
+            ("Ctrl+f / b", "Full-page down / up"),
+            ("J / K", "Next / prev hunk"),
+            ("Ctrl+n / p", "Next / prev file"),
+            ("] / [", "Next / prev file (alias)"),
             ("h", "Focus sidebar"),
         ]),
         ("Diff — Shared", &[
+            ("Space", "Stage file / folder"),
+            ("V", "Mark viewed & next"),
             ("/ → Enter", "Search in file"),
             ("n / N", "Next / prev match"),
             ("s", "Toggle unified / split view"),
@@ -1016,6 +1017,7 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
         ("Commits / PRs", &[
             ("j / k", "Navigate list"),
             ("Ctrl+d / u", "Half-page down / up"),
+            ("Ctrl+f / b", "Full-page down / up"),
             ("Enter", "View diff"),
             ("f", "Filter PRs (PRs tab)"),
             ("Esc", "Return to list"),

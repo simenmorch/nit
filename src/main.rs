@@ -150,8 +150,9 @@ fn handle_key(
 
     // Commit message modal
     if app.committing {
-        // Ctrl+Enter submits from either field
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+        // Alt+Enter submits from either field (plain Enter in the description
+        // field inserts a newline, so we need a modifier to submit from there).
+        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Enter {
             if !app.commit_summary.is_empty() {
                 let msg = app.commit_message();
                 app.committing = false;
@@ -395,11 +396,11 @@ fn handle_diff_tab_key(
     // Ctrl-modified keys
     match key.code {
         KeyCode::PageDown => {
-            app.scroll_down_half_page(content_height, viewport_height);
+            app.scroll_down_full_page(content_height, viewport_height);
             return KeyAction::Continue;
         }
         KeyCode::PageUp => {
-            app.scroll_up_half_page(viewport_height);
+            app.scroll_up_full_page(viewport_height);
             return KeyAction::Continue;
         }
         _ => {}
@@ -415,12 +416,20 @@ fn handle_diff_tab_key(
                 app.scroll_up_half_page(viewport_height);
                 return KeyAction::Continue;
             }
+            KeyCode::Char('f') => {
+                app.scroll_down_full_page(content_height, viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('b') => {
+                app.scroll_up_full_page(viewport_height);
+                return KeyAction::Continue;
+            }
             KeyCode::Char('n') => {
-                app.next_hunk(diff, diff_cache);
+                app.select_next_file(visible);
                 return KeyAction::Continue;
             }
             KeyCode::Char('p') => {
-                app.prev_hunk(diff, diff_cache);
+                app.select_prev_file(visible);
                 return KeyAction::Continue;
             }
             KeyCode::Char('e') => {
@@ -443,7 +452,7 @@ fn handle_diff_tab_key(
             app.toggle_sidebar();
             return KeyAction::Continue;
         }
-        KeyCode::Char('v') => {
+        KeyCode::Char(' ') => {
             let newly_viewed = app.toggle_viewed_entry(diff, visible);
             if matches!(app.review_mode, app::ReviewMode::WorkingTree) {
                 for idx in newly_viewed {
@@ -475,6 +484,14 @@ fn handle_diff_tab_key(
             app.prev_match(viewport_height);
             return KeyAction::Continue;
         }
+        KeyCode::Char('J') => {
+            app.next_hunk(diff, diff_cache);
+            return KeyAction::Continue;
+        }
+        KeyCode::Char('K') => {
+            app.prev_hunk(diff, diff_cache);
+            return KeyAction::Continue;
+        }
         KeyCode::Char('s') => {
             app.toggle_view_mode(diff, diff_cache);
             return KeyAction::Continue;
@@ -503,7 +520,6 @@ fn handle_diff_tab_key(
             KeyCode::Char('k') | KeyCode::Up => app.select_prev_entry(visible),
             KeyCode::Enter => app.activate_entry(visible),
             KeyCode::Char('l') => app.open_file(visible),
-            KeyCode::Char(' ') => app.toggle_fold(visible),
             KeyCode::Esc => {
                 if app.search.is_some() {
                     app.clear_search();
@@ -577,11 +593,11 @@ fn resolve_line_number(app: &app::App, file: &model::DiffFile) -> Option<usize> 
 fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize) -> KeyAction {
     match key.code {
         KeyCode::PageDown => {
-            app.scroll_commits_down_half_page(viewport_height);
+            app.scroll_commits_down_full_page(viewport_height);
             return KeyAction::Continue;
         }
         KeyCode::PageUp => {
-            app.scroll_commits_up_half_page(viewport_height);
+            app.scroll_commits_up_full_page(viewport_height);
             return KeyAction::Continue;
         }
         _ => {}
@@ -595,6 +611,14 @@ fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: us
             }
             KeyCode::Char('u') => {
                 app.scroll_commits_up_half_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('f') => {
+                app.scroll_commits_down_full_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('b') => {
+                app.scroll_commits_up_full_page(viewport_height);
                 return KeyAction::Continue;
             }
             _ => {}
@@ -648,11 +672,11 @@ fn handle_prs_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize)
 
     match key.code {
         KeyCode::PageDown => {
-            app.scroll_prs_down_half_page(viewport_height);
+            app.scroll_prs_down_full_page(viewport_height);
             return KeyAction::Continue;
         }
         KeyCode::PageUp => {
-            app.scroll_prs_up_half_page(viewport_height);
+            app.scroll_prs_up_full_page(viewport_height);
             return KeyAction::Continue;
         }
         _ => {}
@@ -666,6 +690,14 @@ fn handle_prs_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize)
             }
             KeyCode::Char('u') => {
                 app.scroll_prs_up_half_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('f') => {
+                app.scroll_prs_down_full_page(viewport_height);
+                return KeyAction::Continue;
+            }
+            KeyCode::Char('b') => {
+                app.scroll_prs_up_full_page(viewport_height);
                 return KeyAction::Continue;
             }
             _ => {}

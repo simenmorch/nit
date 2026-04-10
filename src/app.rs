@@ -316,18 +316,6 @@ impl App {
         self.focus_diff();
     }
 
-    pub fn toggle_fold(&mut self, visible: &[FlatEntry]) {
-        if let Some(entry) = visible.get(self.selected)
-            && let FlatEntryKind::Folder { path, .. } = &entry.kind
-        {
-            if self.collapsed.contains(path) {
-                self.collapsed.remove(path);
-            } else {
-                self.collapsed.insert(path.clone());
-            }
-        }
-    }
-
     /// Toggle viewed state for the selected entry. Returns indices of files
     /// that were newly marked as viewed (for staging purposes).
     pub fn toggle_viewed_entry(
@@ -411,6 +399,18 @@ impl App {
     pub fn scroll_up_half_page(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
         self.scroll = self.scroll.saturating_sub(half);
+    }
+
+    pub fn scroll_down_full_page(&mut self, content_height: usize, viewport_height: usize) {
+        // 2-line overlap matches vim's Ctrl-F behavior — keeps context across pages.
+        let step = viewport_height.saturating_sub(2).max(1);
+        let max_scroll = content_height.saturating_sub(viewport_height);
+        self.scroll = (self.scroll + step).min(max_scroll);
+    }
+
+    pub fn scroll_up_full_page(&mut self, viewport_height: usize) {
+        let step = viewport_height.saturating_sub(2).max(1);
+        self.scroll = self.scroll.saturating_sub(step);
     }
 
     pub fn focus_diff(&mut self) {
@@ -711,6 +711,19 @@ impl App {
         self.commit_selected = self.commit_selected.saturating_sub(half);
     }
 
+    pub fn scroll_commits_down_full_page(&mut self, viewport_height: usize) {
+        let step = viewport_height.saturating_sub(2).max(1);
+        if !self.commits.is_empty() {
+            self.commit_selected =
+                (self.commit_selected + step).min(self.commits.len() - 1);
+        }
+    }
+
+    pub fn scroll_commits_up_full_page(&mut self, viewport_height: usize) {
+        let step = viewport_height.saturating_sub(2).max(1);
+        self.commit_selected = self.commit_selected.saturating_sub(step);
+    }
+
     pub fn jump_to_top_commits(&mut self) {
         self.commit_selected = 0;
         self.commit_scroll = 0;
@@ -758,6 +771,19 @@ impl App {
     pub fn scroll_prs_up_half_page(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
         self.pr_selected = self.pr_selected.saturating_sub(half);
+    }
+
+    pub fn scroll_prs_down_full_page(&mut self, viewport_height: usize) {
+        let step = viewport_height.saturating_sub(2).max(1);
+        let count = self.filtered_pr_count();
+        if count > 0 {
+            self.pr_selected = (self.pr_selected + step).min(count - 1);
+        }
+    }
+
+    pub fn scroll_prs_up_full_page(&mut self, viewport_height: usize) {
+        let step = viewport_height.saturating_sub(2).max(1);
+        self.pr_selected = self.pr_selected.saturating_sub(step);
     }
 
     pub fn jump_to_top_prs(&mut self) {
@@ -934,24 +960,6 @@ mod tests {
         let visible2 = crate::tree::FileTree::from_files(&diff.files).flatten(&app.collapsed);
         app.activate_entry(&visible2);
         assert!(!app.collapsed.contains("src"));
-    }
-
-    #[test]
-    fn toggle_fold_on_folder() {
-        let diff = make_diff(vec![make_file("src/a.rs", vec![])]);
-        let visible = flat_entries_for(&diff);
-        let mut app = App::new();
-        app.toggle_fold(&visible); // on folder
-        assert!(app.collapsed.contains("src"));
-    }
-
-    #[test]
-    fn toggle_fold_on_file_is_noop() {
-        let diff = make_diff(vec![make_file("a.rs", vec![])]);
-        let visible = flat_entries_for(&diff);
-        let mut app = App::new();
-        app.toggle_fold(&visible); // on file — no-op
-        assert!(app.collapsed.is_empty());
     }
 
     #[test]
