@@ -118,6 +118,25 @@ pub fn draw(
     }
 }
 
+pub(crate) fn stats_padding(inner_width: usize, prefix_width: usize, stats_width: usize) -> usize {
+    inner_width
+        .saturating_sub(prefix_width)
+        .saturating_sub(stats_width)
+}
+
+/// Build the tree-connector prefix for a sidebar entry, e.g. `│  ├─ `.
+/// Returns an empty string for depth-0 entries.
+fn tree_prefix(entry: &FlatEntry) -> String {
+    let mut out = String::new();
+    for &has_next in &entry.ancestor_has_next {
+        out.push_str(if has_next { "│  " } else { "   " });
+    }
+    if entry.depth > 0 {
+        out.push_str(if entry.is_last_sibling { "└─ " } else { "├─ " });
+    }
+    out
+}
+
 fn is_folder_viewed(diff: &model::Diff, folder_path: &str) -> bool {
     let prefix = format!("{}/", folder_path);
     let files: Vec<_> = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).collect();
@@ -131,6 +150,13 @@ fn folder_stats(diff: &model::Diff, folder_path: &str) -> (usize, usize) {
     (added, removed)
 }
 
+pub(crate) fn folder_file_counts(diff: &model::Diff, folder_path: &str) -> (usize, usize) {
+    let prefix = format!("{}/", folder_path);
+    let files: Vec<_> = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).collect();
+    let viewed = files.iter().filter(|f| f.viewed).count();
+    (files.len(), viewed)
+}
+
 fn draw_sidebar(
     frame: &mut Frame,
     app: &App,
@@ -140,35 +166,41 @@ fn draw_sidebar(
     colors: &ColorsConfig,
 ) {
     let is_focused = matches!(app.focus, Focus::Sidebar);
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let highlight_bg = colors.bg_selected;
 
     let lines: Vec<Line> = visible
         .iter()
         .enumerate()
         .map(|(i, entry)| {
             let is_selected = i == app.selected;
-            let marker = if is_selected { "▸ " } else { "  " };
-            let indent = "  ".repeat(entry.depth);
+            let indent = tree_prefix(entry);
 
-            match &entry.kind {
+            let (mut prefix_spans, stats): (Vec<Span>, String) = match &entry.kind {
                 FlatEntryKind::Folder { path, name, expanded } => {
                     let viewed = if is_folder_viewed(diff, path) { "✓ " } else { "  " };
                     let arrow = if *expanded { "▾ " } else { "▸ " };
                     let (added, removed) = folder_stats(diff, path);
+                    let (count, viewed_count) = folder_file_counts(diff, path);
+                    let count_str = if viewed_count > 0 {
+                        format!(" ({}, {}✓)", count, viewed_count)
+                    } else {
+                        format!(" ({})", count)
+                    };
                     let stats = format!("+{} -{}", added, removed);
                     let name_style = if is_selected {
                         Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(colors.fg_accent)
                     };
-                    Line::from(vec![
+                    let spans = vec![
                         Span::styled(viewed, Style::default().fg(colors.fg_added)),
-                        Span::raw(marker),
                         Span::raw(indent),
                         Span::styled(arrow, Style::default().fg(colors.fg_muted)),
                         Span::styled(format!("{}/", name), name_style),
-                        Span::raw("  "),
-                        Span::styled(stats, Style::default().fg(colors.fg_muted)),
-                    ])
+                        Span::styled(count_str, Style::default().fg(colors.fg_muted)),
+                    ];
+                    (spans, stats)
                 }
                 FlatEntryKind::File { file_index, name } => {
                     let file = &diff.files[*file_index];
@@ -185,19 +217,29 @@ fn draw_sidebar(
                     } else {
                         Style::default().fg(colors.fg)
                     };
-                    let file_indent = "  ".repeat(entry.depth.saturating_sub(1));
                     let status_badge = format!("{} ", status_char);
-                    Line::from(vec![
+                    let spans = vec![
                         Span::styled(viewed, Style::default().fg(colors.fg_added)),
-                        Span::raw(marker),
-                        Span::raw(file_indent),
+                        Span::raw(indent),
                         Span::styled(status_badge, Style::default().fg(status_color)),
                         Span::styled(name.clone(), name_style),
-                        Span::raw("  "),
-                        Span::styled(stats, Style::default().fg(colors.fg_muted)),
-                    ])
+                    ];
+                    (spans, stats)
                 }
+            };
+
+            let prefix_width: usize = prefix_spans.iter().map(|s| s.content.chars().count()).sum();
+            let pad = stats_padding(inner_width, prefix_width, stats.chars().count());
+            prefix_spans.push(Span::raw(" ".repeat(pad)));
+            prefix_spans.push(Span::styled(stats, Style::default().fg(colors.fg_muted)));
+
+            if is_selected {
+                prefix_spans = prefix_spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style.bg(highlight_bg)))
+                    .collect();
             }
+            Line::from(prefix_spans)
         })
         .collect();
 
@@ -207,16 +249,25 @@ fn draw_sidebar(
         Style::default().fg(colors.border_unfocused)
     };
 
+    let summary = crate::app::diff_summary(diff);
+    let title = format!(
+        " Files  {}/{} viewed  +{} -{} ",
+        summary.viewed, summary.total, summary.added, summary.removed,
+    );
+
     let file_list = Paragraph::new(lines)
         .scroll((app.sidebar_scroll as u16, 0))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border_style)
-                .title(" Files "),
+                .title(title),
         );
 
     frame.render_widget(file_list, area);
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    render_scrollbar(frame, area, app.sidebar_scroll, visible.len(), inner_height, colors);
 }
 
 fn draw_file_diff(
@@ -380,11 +431,29 @@ fn draw_file_diff(
         }
     }
 
-    if file.hunks.is_empty() {
+    if file.is_binary {
         lines.push(Line::from(Span::styled(
             "Binary file changed",
             Style::default().fg(colors.fg_muted),
         )));
+    } else if file.hunks.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "(empty file)",
+            Style::default().fg(colors.fg_muted),
+        )));
+    }
+
+    // Sticky banner marking a file that is new to git (all content is new).
+    if matches!(file.status, model::FileStatus::Added) {
+        lines.insert(
+            0,
+            Line::from(Span::styled(
+                "★ New file — entire content is new",
+                Style::default()
+                    .fg(colors.fg_added)
+                    .add_modifier(Modifier::BOLD),
+            )),
+        );
     }
 
     let viewed_indicator = if file.viewed { " ✓" } else { "" };
@@ -1460,10 +1529,26 @@ fn draw_file_diff_split(
         }
     }
 
-    if file.hunks.is_empty() {
+    if file.is_binary {
         let msg = Span::styled("Binary file changed", Style::default().fg(colors.fg_muted));
         left_lines.push(Line::from(msg.clone()));
         right_lines.push(Line::from(msg));
+    } else if file.hunks.is_empty() {
+        let msg = Span::styled("(empty file)", Style::default().fg(colors.fg_muted));
+        left_lines.push(Line::from(msg.clone()));
+        right_lines.push(Line::from(msg));
+    }
+
+    // Sticky banner marking a file that is new to git (all content is new).
+    if matches!(file.status, model::FileStatus::Added) {
+        let banner = Span::styled(
+            "★ New file — entire content is new",
+            Style::default()
+                .fg(colors.fg_added)
+                .add_modifier(Modifier::BOLD),
+        );
+        left_lines.insert(0, Line::from(banner.clone()));
+        right_lines.insert(0, Line::from(banner));
     }
 
     let viewed_indicator = if file.viewed { " ✓" } else { "" };
@@ -1795,7 +1880,9 @@ mod tests {
     #[test]
     fn render_binary_file() {
         let mut terminal = test_terminal(120, 40);
-        let diff = make_diff(vec![make_file("image.png", vec![])]);
+        let mut file = make_file("image.png", vec![]);
+        file.is_binary = true;
+        let diff = make_diff(vec![file]);
         let visible = flat_entries_for(&diff);
         let app = App::new();
         render(&mut terminal, &app, &diff, &visible);
@@ -1830,5 +1917,46 @@ mod tests {
         );
         // 2 hunks: (1 header + 2 lines) + (1 header + 1 line) = 5
         assert_eq!(diff_line_count(&file, DiffViewMode::Unified), 5);
+    }
+
+    // ── Sidebar helpers ──
+
+    #[test]
+    fn stats_padding_fills_to_right_edge() {
+        // inner_width 40, prefix takes 20, stats text "+12 -3" is 6 chars
+        let padding = stats_padding(40, 20, 6);
+        assert_eq!(padding, 14);
+    }
+
+    #[test]
+    fn stats_padding_clamps_when_overflow() {
+        let padding = stats_padding(20, 25, 6);
+        assert_eq!(padding, 0);
+    }
+
+    #[test]
+    fn folder_file_counts_total_and_viewed() {
+        let mut diff = make_diff(vec![
+            make_file("src/a.rs", vec![]),
+            make_file("src/b.rs", vec![]),
+            make_file("src/c.rs", vec![]),
+            make_file("other/d.rs", vec![]),
+        ]);
+        diff.files[0].viewed = true;
+        diff.files[2].viewed = true;
+
+        let (total, viewed) = folder_file_counts(&diff, "src");
+        assert_eq!(total, 3);
+        assert_eq!(viewed, 2);
+    }
+
+    #[test]
+    fn folder_file_counts_excludes_other_folders() {
+        let diff = make_diff(vec![
+            make_file("src/a.rs", vec![]),
+            make_file("src-other/b.rs", vec![]), // shares prefix string, not folder
+        ]);
+        let (total, _) = folder_file_counts(&diff, "src");
+        assert_eq!(total, 1);
     }
 }

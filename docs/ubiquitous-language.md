@@ -28,8 +28,9 @@ Key domain terms as used throughout the nit codebase.
 
 | Term | Definition |
 |---|---|
-| **FileTree** | Hierarchical structure built from flat file paths. Folders are sorted before files. |
-| **FlatEntry** | A single node in the flattened (renderable) tree. Has a depth level and is either a `Folder` or a `File`. |
+| **FileTree** | Hierarchical structure built from flat file paths. Folders are sorted before files. Single-child folder chains (e.g. `src/api/handlers/` when nothing else lives at those levels) are merged into one row labelled with the joined path. |
+| **FlatEntry** | A single node in the flattened (renderable) tree. Has a depth level and is either a `Folder` or a `File`. Also carries `ancestor_has_next` and `is_last_sibling` for drawing tree connectors. |
+| **Tree Connector** | The `├─`, `└─`, `│  ` glyphs drawn before each sidebar entry to make the parent-child hierarchy visible. Computed from each `FlatEntry`'s `ancestor_has_next` and `is_last_sibling`. |
 
 ## Side-by-Side Diff
 

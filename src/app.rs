@@ -6,6 +6,22 @@ use crate::tree::{FlatEntry, FlatEntryKind};
 
 pub const PR_FILTER_OPTIONS: &[&str] = &["open", "draft", "merged", "closed", "mine"];
 
+pub struct DiffSummary {
+    pub viewed: usize,
+    pub total: usize,
+    pub added: usize,
+    pub removed: usize,
+}
+
+pub fn diff_summary(diff: &model::Diff) -> DiffSummary {
+    DiffSummary {
+        viewed: diff.files.iter().filter(|f| f.viewed).count(),
+        total: diff.files.len(),
+        added: diff.files.iter().map(|f| f.added).sum(),
+        removed: diff.files.iter().map(|f| f.removed).sum(),
+    }
+}
+
 pub struct PrFilter {
     pub enabled: HashSet<String>,
     pub modal_open: bool,
@@ -1717,5 +1733,28 @@ mod tests {
         let from = &[0];
         let to = &[0];
         assert_eq!(map_scroll(0, from, to), 0);
+    }
+
+    // ── Diff summary ──
+
+    #[test]
+    fn diff_summary_counts_viewed_added_removed() {
+        let mut diff = make_diff(vec![
+            make_file("a.rs", vec![make_hunk("@@", vec![
+                make_line(LineKind::Added, "x", None, Some(1)),
+                make_line(LineKind::Added, "y", None, Some(2)),
+                make_line(LineKind::Removed, "z", Some(1), None),
+            ])]),
+            make_file("b.rs", vec![make_hunk("@@", vec![
+                make_line(LineKind::Added, "p", None, Some(1)),
+            ])]),
+        ]);
+        diff.files[0].viewed = true;
+
+        let s = crate::app::diff_summary(&diff);
+        assert_eq!(s.viewed, 1);
+        assert_eq!(s.total, 2);
+        assert_eq!(s.added, 3);
+        assert_eq!(s.removed, 1);
     }
 }

@@ -35,6 +35,7 @@ pub struct DiffFile {
     pub added: usize,
     pub removed: usize,
     pub viewed: bool,
+    pub is_binary: bool,
 }
 
 #[derive(Debug, Clone)]

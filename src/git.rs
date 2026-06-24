@@ -246,6 +246,7 @@ pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
     opts.context_lines(5);
     opts.include_untracked(true);
     opts.recurse_untracked_dirs(true);
+    opts.show_untracked_content(true);
 
     let diff = repo
         .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
@@ -462,6 +463,7 @@ fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
             added,
             removed,
             viewed: false,
+            is_binary,
         });
     }
 
@@ -559,6 +561,34 @@ mod tests {
         assert_eq!(diff.files.len(), 1);
         assert_eq!(diff.files[0].path, "new.txt");
         assert!(matches!(diff.files[0].status, model::FileStatus::Added));
+    }
+
+    #[test]
+    fn uncommitted_diff_untracked_file_shows_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        // Create initial commit so HEAD exists
+        commit_file(&repo, "init.txt", "init", "initial commit");
+        // Create a brand new file but do NOT stage it
+        fs::write(dir.path().join("untracked.txt"), "line one\nline two\n").unwrap();
+
+        let diff = get_uncommitted_diff(&repo).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        let file = &diff.files[0];
+        assert_eq!(file.path, "untracked.txt");
+        assert!(matches!(file.status, model::FileStatus::Added));
+        assert!(!file.is_binary);
+        // Content of the untracked file must be visible as added lines.
+        assert!(!file.hunks.is_empty(), "untracked file should have hunks");
+        let added: Vec<&str> = file
+            .hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .filter(|l| matches!(l.kind, model::LineKind::Added))
+            .map(|l| l.content.trim_end())
+            .collect();
+        assert_eq!(added, vec!["line one", "line two"]);
+        assert_eq!(file.added, 2);
     }
 
     #[test]

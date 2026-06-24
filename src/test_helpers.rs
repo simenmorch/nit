@@ -38,6 +38,7 @@ pub fn make_file(path: &str, hunks: Vec<Hunk>) -> DiffFile {
         added,
         removed,
         viewed: false,
+        is_binary: false,
     }
 }
 

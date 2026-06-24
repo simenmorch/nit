@@ -160,6 +160,7 @@ impl RemoteProvider for GitHubProvider {
                 Some(patch) => parse_patch(patch),
                 None => Vec::new(),
             };
+            let is_binary = entry.patch.is_none();
 
             let added = entry.additions as usize;
             let removed = entry.deletions as usize;
@@ -171,6 +172,7 @@ impl RemoteProvider for GitHubProvider {
                 added,
                 removed,
                 viewed: false,
+                is_binary,
             });
         }
 
