@@ -1053,7 +1053,24 @@ fn diff_content_eq(a: &model::Diff, b: &model::Diff) -> bool {
             && fa.added == fb.added
             && fa.removed == fb.removed
             && fa.hunks.len() == fb.hunks.len()
+            && fa
+                .hunks
+                .iter()
+                .zip(fb.hunks.iter())
+                .all(|(ha, hb)| hunk_content_eq(ha, hb))
     })
+}
+
+/// Compare two hunks by header and line content. Used to detect when a file's
+/// edits changed in a way that preserves added/removed counts and hunk count
+/// (e.g. editing the text of an already-modified line).
+fn hunk_content_eq(a: &model::Hunk, b: &model::Hunk) -> bool {
+    a.header == b.header
+        && a.lines.len() == b.lines.len()
+        && a.lines
+            .iter()
+            .zip(b.lines.iter())
+            .all(|(la, lb)| la.content == lb.content && la.old_num == lb.old_num && la.new_num == lb.new_num)
 }
 
 /// Carry over `viewed` flags from the old diff to a new diff.
