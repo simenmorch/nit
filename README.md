@@ -48,9 +48,6 @@ Press `?` in-app to see the full help overlay.
 |---|---|
 | `j` / `k` | Navigate files |
 | `l` / `Enter` | Open file / toggle folder |
-| `Space` | Fold / unfold folder |
-| `v` | Toggle viewed |
-| `V` | Mark viewed & next |
 | `Tab` | Focus diff panel |
 
 ### Diff — Panel
@@ -59,18 +56,23 @@ Press `?` in-app to see the full help overlay.
 |---|---|
 | `j` / `k` | Scroll up / down |
 | `Ctrl+d` / `Ctrl+u` | Half-page down / up |
-| `PageDown` / `PageUp` | Half-page down / up |
-| `Ctrl+n` / `Ctrl+p` | Next / prev hunk |
-| `]` / `[` | Next / prev file |
+| `Ctrl+f` / `Ctrl+b` | Full-page down / up |
+| `PageDown` / `PageUp` | Full-page down / up |
+| `J` / `K` | Next / prev hunk |
+| `Ctrl+n` / `Ctrl+p` | Next / prev file |
+| `]` / `[` | Next / prev file (alias) |
 | `h` | Focus sidebar |
 
 ### Diff — Shared
 
 | Key | Action |
 |---|---|
+| `Space` | Stage file / folder |
+| `V` | Mark viewed & next |
 | `/` then `Enter` | Search in file |
 | `n` / `N` | Next / prev match |
 | `s` | Toggle unified / split view |
+| `Ctrl+e` | Open in `$EDITOR` |
 | `Esc` | Clear search or go back |
 
 ### Local repo (default mode)
@@ -87,6 +89,8 @@ Press `?` in-app to see the full help overlay.
 |---|---|
 | `j` / `k` | Navigate list |
 | `Ctrl+d` / `Ctrl+u` | Half-page down / up |
+| `Ctrl+f` / `Ctrl+b` | Full-page down / up |
+| `PageDown` / `PageUp` | Full-page down / up |
 | `Enter` | View diff |
 | `f` | Filter PRs (PRs tab) |
 | `Esc` | Return to list |
@@ -145,6 +149,7 @@ By default, nit uses your terminal's ANSI colors, so it will inherit whatever th
 | `bg_split_empty` | `#19191E` | Empty side background (split view) |
 | `bg_search_match` | `#78641E` | Search match highlight |
 | `bg_search_current` | `#B48C14` | Current search match |
+| `bg_selected` | `#283246` | Selected item highlight background |
 
 #### Nord theme
 
@@ -169,6 +174,7 @@ bg_inline_removed = "#502828"
 bg_split_empty = "#1E222A"
 bg_search_match = "#78641E"
 bg_search_current = "#B48C14"
+bg_selected = "#3B4252"
 ```
 
 ## Building

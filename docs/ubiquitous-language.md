@@ -40,6 +40,7 @@ Key domain terms as used throughout the nit codebase.
 | **Pairing** | Matching a removed line with a corresponding added line so they appear on the same row for comparison. |
 | **InlineSpan** | A byte range within a line marking a changed or unchanged segment. Used for character-level highlighting within paired lines. |
 | **Inline Diff** | Character-level highlighting of what changed within a line, as opposed to just marking the whole line as added/removed. |
+| **DiffCache** | Precomputed and cached per-file split-view layout metadata (row count, hunk start rows) to avoid redundant recomputations in the event loop. |
 
 ## Review Workflow
 

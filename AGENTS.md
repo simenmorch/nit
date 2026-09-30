@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance for AI coding agents when working with code in this repository.
 
 ## Build and Run
 
@@ -45,7 +45,8 @@ See [docs/ubiquitous-language.md](docs/ubiquitous-language.md) for definitions o
 - **`app.rs`** — UI state (`App` struct): selection, scroll, focus, search, view mode, tabs, modals (commit, branch, confirm, help, PR filter). All state mutation lives here.
 - **`ui.rs`** — Stateless rendering. Reads `App` + `Diff`, draws tab bar, sidebar, diff (unified + split), commit list, PR list, modals, status bar. Owns syntax highlighting via syntect.
 - **`split.rs`** — Side-by-side diff logic: converts hunks into `SplitRow`s (paired/left-only/right-only) with character-level inline diff spans via the `similar` crate.
-- **`tree.rs`** — `FileTree`: builds a hierarchical tree from flat file paths, flattens it for rendering with collapsible folders (folders sorted before files). Folders and files are kept in separate maps so a segment can be both (e.g. deleting file `foo` while adding `foo/bar.rs`).
+- **`cache.rs`** — Precomputes and caches per-file split-view layout metadata (`DiffCache`) to avoid redundant recomputations in the event loop.
+- **`tree.rs`** — `FileTree`: builds a hierarchical tree from flat file paths, flattens it for rendering with collapsible folders (folders sorted before files) and collapsed single-child folder chains. Folders and files are kept in separate maps so a segment can be both (e.g. deleting file `foo` while adding `foo/bar.rs`).
 - **`provider.rs`** — `RemoteProvider` trait + shared types (`Comment`, `PrMetadata`, `PrState`).
 - **`config.rs`** — TOML config loading from `~/.config/nit/nit.toml`. Supports syntax theme selection (bundled, `.tmTheme`, `.sublime-color-scheme` files in `~/.config/nit/themes/`) and full color customization via hex values.
 - **`lib.rs`** — Crate root, re-exports all modules.
@@ -60,5 +61,6 @@ See [docs/ubiquitous-language.md](docs/ubiquitous-language.md) for definitions o
 - `Option<usize>` for line numbers — no sentinel values. `None` means the line doesn't exist in that version.
 - `viewed` on `DiffFile` maps to git staging in default (uncommitted) mode — toggling viewed stages/unstages the file. `toggle_viewed_entry` returns a `ViewedChange` describing both directions; `main::sync_index_with_viewed` applies it and rolls the flag back if the index operation fails, so the UI never claims a file is staged when it is not.
 - `file_index` in `FlatEntry` is *positional*. After the diff is replaced, use `App::resync_selection` to re-resolve the selection by path — clamping alone would silently point at a different file.
+- Split-view layout data is precomputed into `DiffCache` on diff load/refresh to avoid redundant recomputations in the event loop.
 - Column layout in `ui.rs` uses `display_width`/`truncate_to_width`/`pad_to_width` (unicode-width), not `str::len` or `chars().count()`. Both disagree with what ratatui measures.
 - The event loop drains all queued key events before redrawing, for responsiveness.
