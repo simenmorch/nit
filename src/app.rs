@@ -6,6 +6,21 @@ use crate::tree::{FlatEntry, FlatEntryKind};
 
 pub const PR_FILTER_OPTIONS: &[&str] = &["open", "draft", "merged", "closed", "mine"];
 
+/// Files whose `viewed` flag changed in a single toggle, split by direction.
+/// In working-tree mode `viewed` maps to the git index, so `newly_viewed` must
+/// be staged and `newly_unviewed` must be unstaged.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ViewedChange {
+    pub newly_viewed: Vec<usize>,
+    pub newly_unviewed: Vec<usize>,
+}
+
+impl ViewedChange {
+    pub fn is_empty(&self) -> bool {
+        self.newly_viewed.is_empty() && self.newly_unviewed.is_empty()
+    }
+}
+
 pub struct DiffSummary {
     pub viewed: usize,
     pub total: usize,
@@ -59,7 +74,9 @@ impl PrFilter {
         let has_state_filters = self.enabled.iter().any(|s| s != "mine");
         let state_match = !has_state_filters || self.enabled.contains(pr.state.as_str());
         let mine_filter = if self.enabled.contains("mine") {
-            self.github_user.as_ref().is_some_and(|user| pr.author == *user)
+            self.github_user
+                .as_ref()
+                .is_some_and(|user| pr.author == *user)
         } else {
             true
         };
@@ -83,8 +100,16 @@ pub enum Tab {
 #[derive(Clone)]
 pub enum ReviewMode {
     WorkingTree,
-    Commit { short_oid: String, message: String, return_tab: Tab },
-    PullRequest { number: u64, title: String, return_tab: Tab },
+    Commit {
+        short_oid: String,
+        message: String,
+        return_tab: Tab,
+    },
+    PullRequest {
+        number: u64,
+        title: String,
+        return_tab: Tab,
+    },
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +174,8 @@ impl BranchModal {
     }
 
     pub fn current_name(&self) -> &str {
-        self.branches.iter()
+        self.branches
+            .iter()
             .find(|b| b.is_head)
             .map(|b| b.name.as_str())
             .unwrap_or("")
@@ -248,11 +274,57 @@ impl App {
     }
 
     pub fn filtered_prs(&self) -> Vec<&model::PrInfo> {
-        self.prs.iter().filter(|pr| self.pr_filter.matches(pr)).collect()
+        self.prs
+            .iter()
+            .filter(|pr| self.pr_filter.matches(pr))
+            .collect()
     }
 
     pub fn filtered_pr_count(&self) -> usize {
-        self.prs.iter().filter(|pr| self.pr_filter.matches(pr)).count()
+        self.prs
+            .iter()
+            .filter(|pr| self.pr_filter.matches(pr))
+            .count()
+    }
+
+    /// The path of the file currently shown in the diff panel, if any.
+    pub fn selected_path<'a>(&self, diff: &'a crate::model::Diff) -> Option<&'a str> {
+        diff.files.get(self.selected_file).map(|f| f.path.as_str())
+    }
+
+    /// Re-point the selection after the diff has been replaced.
+    ///
+    /// `file_index` is a *positional* index into `diff.files`, so a file added
+    /// or removed earlier in the sort order shifts every later index. Clamping
+    /// alone would leave the cursor and the diff panel pointing at different
+    /// files — and, in working-tree mode, would stage the wrong one. So we
+    /// re-resolve by path and only fall back to clamping if the file is gone.
+    pub fn resync_selection(
+        &mut self,
+        previous_path: Option<&str>,
+        diff: &crate::model::Diff,
+        visible: &[FlatEntry],
+    ) {
+        if let Some(path) = previous_path
+            && let Some(idx) = diff.files.iter().position(|f| f.path == path)
+        {
+            self.selected_file = idx;
+            if let Some(i) = visible.iter().position(
+                |e| matches!(e.kind, FlatEntryKind::File { file_index, .. } if file_index == idx),
+            ) {
+                self.selected = i;
+            }
+            return;
+        }
+
+        // The previously selected file is no longer in the diff.
+        if self.selected_file >= diff.files.len() {
+            self.selected_file = diff.files.len().saturating_sub(1);
+        }
+        if self.selected >= visible.len() {
+            self.selected = visible.len().saturating_sub(1);
+        }
+        self.update_selected_file(visible);
     }
 
     pub fn update_selected_file(&mut self, visible: &[FlatEntry]) {
@@ -290,7 +362,10 @@ impl App {
     }
 
     pub fn select_prev_file(&mut self, visible: &[FlatEntry]) {
-        for i in (0..self.selected).rev() {
+        // `selected` may exceed `visible.len()` if the diff shrank since the
+        // last flatten, so bound the scan explicitly.
+        let start = self.selected.min(visible.len());
+        for i in (0..start).rev() {
             if let FlatEntryKind::File { file_index, .. } = &visible[i].kind {
                 self.selected = i;
                 self.selected_file = *file_index;
@@ -334,21 +409,24 @@ impl App {
         self.focus_diff();
     }
 
-    /// Toggle viewed state for the selected entry. Returns indices of files
-    /// that were newly marked as viewed (for staging purposes).
+    /// Toggle viewed state for the selected entry. Returns which files changed,
+    /// split by direction, so the caller can stage/unstage accordingly.
     pub fn toggle_viewed_entry(
         &mut self,
         diff: &mut crate::model::Diff,
         visible: &[FlatEntry],
-    ) -> Vec<usize> {
-        let mut newly_viewed = Vec::new();
+    ) -> ViewedChange {
+        let mut change = ViewedChange::default();
         if let Some(entry) = visible.get(self.selected) {
             match &entry.kind {
                 FlatEntryKind::File { file_index, .. } => {
-                    let was_viewed = diff.files[*file_index].viewed;
-                    diff.files[*file_index].viewed = !was_viewed;
-                    if !was_viewed {
-                        newly_viewed.push(*file_index);
+                    if let Some(file) = diff.files.get_mut(*file_index) {
+                        file.viewed = !file.viewed;
+                        if file.viewed {
+                            change.newly_viewed.push(*file_index);
+                        } else {
+                            change.newly_unviewed.push(*file_index);
+                        }
                     }
                 }
                 FlatEntryKind::Folder { path, .. } => {
@@ -360,28 +438,42 @@ impl App {
                         .all(|f| f.viewed);
                     let new_viewed = !all_viewed;
                     for (i, file) in diff.files.iter_mut().enumerate() {
-                        if file.path.starts_with(&prefix) {
+                        if file.path.starts_with(&prefix) && file.viewed != new_viewed {
                             file.viewed = new_viewed;
                             if new_viewed {
-                                newly_viewed.push(i);
+                                change.newly_viewed.push(i);
+                            } else {
+                                change.newly_unviewed.push(i);
                             }
                         }
                     }
                 }
             }
         }
-        newly_viewed
+        change
     }
 
-    /// Mark the current file as viewed and advance to the next file.
-    /// Returns the index of the file that was marked as viewed.
+    /// Revert a `viewed` change that the caller failed to apply to the index.
+    pub fn revert_viewed(&mut self, diff: &mut crate::model::Diff, index: usize, viewed: bool) {
+        if let Some(file) = diff.files.get_mut(index) {
+            file.viewed = viewed;
+        }
+    }
+
+    /// Mark the file currently shown in the diff panel as viewed and advance the
+    /// sidebar cursor to the next file. Returns the index of the file that was
+    /// marked, or `None` if there is no such file (empty diff, or `selected_file`
+    /// left dangling by a diff refresh).
+    ///
+    /// Note this marks `selected_file` — the file being displayed — not the entry
+    /// under the cursor, which may be a folder.
     pub fn mark_viewed_and_next(
         &mut self,
         diff: &mut crate::model::Diff,
         visible: &[FlatEntry],
-    ) -> usize {
+    ) -> Option<usize> {
         let marked = self.selected_file;
-        diff.files[marked].viewed = true;
+        diff.files.get_mut(marked)?.viewed = true;
 
         // Find the next file entry after the current sidebar selection
         for (i, entry) in visible.iter().enumerate().skip(self.selected + 1) {
@@ -389,10 +481,10 @@ impl App {
                 self.selected = i;
                 self.selected_file = *file_index;
                 self.scroll = 0;
-                return marked;
+                break;
             }
         }
-        marked
+        Some(marked)
     }
 
     pub fn scroll_down(&mut self, content_height: usize, viewport_height: usize) {
@@ -447,11 +539,7 @@ impl App {
         }
     }
 
-    pub fn toggle_view_mode(
-        &mut self,
-        diff: &model::Diff,
-        cache: &crate::cache::DiffCache,
-    ) {
+    pub fn toggle_view_mode(&mut self, diff: &model::Diff, cache: &crate::cache::DiffCache) {
         let old_mode = self.view_mode;
         self.view_mode = match old_mode {
             DiffViewMode::Unified => DiffViewMode::SideBySide,
@@ -470,6 +558,11 @@ impl App {
 
             self.scroll = map_scroll(self.scroll, from_starts, to_starts);
         }
+
+        // Search match indices are row numbers in the *previous* view's
+        // coordinate space. Keeping them would make `n`/`N` jump to unrelated
+        // rows and highlight the wrong lines, so drop them.
+        self.search = None;
 
         match self.view_mode {
             DiffViewMode::SideBySide => {
@@ -495,7 +588,12 @@ impl App {
         }
     }
 
-    pub fn jump_to_bottom(&mut self, visible: &[FlatEntry], content_height: usize, viewport_height: usize) {
+    pub fn jump_to_bottom(
+        &mut self,
+        visible: &[FlatEntry],
+        content_height: usize,
+        viewport_height: usize,
+    ) {
         match self.focus {
             Focus::Sidebar => {
                 if !visible.is_empty() {
@@ -602,13 +700,19 @@ impl App {
                 for (i, row) in rows.iter().enumerate() {
                     let hit = match row {
                         SplitRow::HunkHeader(h) => h.to_lowercase().contains(&query_lower),
-                        SplitRow::Context(line) => line.content.to_lowercase().contains(&query_lower),
+                        SplitRow::Context(line) => {
+                            line.content.to_lowercase().contains(&query_lower)
+                        }
                         SplitRow::Paired { left, right, .. } => {
                             left.content.to_lowercase().contains(&query_lower)
                                 || right.content.to_lowercase().contains(&query_lower)
                         }
-                        SplitRow::LeftOnly(line) => line.content.to_lowercase().contains(&query_lower),
-                        SplitRow::RightOnly(line) => line.content.to_lowercase().contains(&query_lower),
+                        SplitRow::LeftOnly(line) => {
+                            line.content.to_lowercase().contains(&query_lower)
+                        }
+                        SplitRow::RightOnly(line) => {
+                            line.content.to_lowercase().contains(&query_lower)
+                        }
                     };
                     if hit {
                         matches.push(SearchMatch { line_index: i });
@@ -719,8 +823,7 @@ impl App {
     pub fn scroll_commits_down_half_page(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
         if !self.commits.is_empty() {
-            self.commit_selected =
-                (self.commit_selected + half).min(self.commits.len() - 1);
+            self.commit_selected = (self.commit_selected + half).min(self.commits.len() - 1);
         }
     }
 
@@ -732,8 +835,7 @@ impl App {
     pub fn scroll_commits_down_full_page(&mut self, viewport_height: usize) {
         let step = viewport_height.saturating_sub(2).max(1);
         if !self.commits.is_empty() {
-            self.commit_selected =
-                (self.commit_selected + step).min(self.commits.len() - 1);
+            self.commit_selected = (self.commit_selected + step).min(self.commits.len() - 1);
         }
     }
 
@@ -826,6 +928,20 @@ impl App {
         }
     }
 
+    /// Keep the commit cursor inside the list after it has been reloaded.
+    /// Without this the selection marker vanishes and `commit_scroll` points
+    /// past the end.
+    pub fn clamp_commit_selection(&mut self) {
+        let count = self.commits.len();
+        if count == 0 {
+            self.commit_selected = 0;
+            self.commit_scroll = 0;
+        } else if self.commit_selected >= count {
+            self.commit_selected = count - 1;
+            self.commit_scroll = self.commit_scroll.min(self.commit_selected);
+        }
+    }
+
     pub fn reset_diff_state(&mut self) {
         self.focus = Focus::Sidebar;
         self.show_sidebar = true;
@@ -841,7 +957,11 @@ impl App {
         self.search = None;
     }
 
-    fn hunk_starts(&self, hunks: &[crate::model::Hunk], cache: &crate::cache::DiffCache) -> Vec<usize> {
+    fn hunk_starts(
+        &self,
+        hunks: &[crate::model::Hunk],
+        cache: &crate::cache::DiffCache,
+    ) -> Vec<usize> {
         match self.view_mode {
             DiffViewMode::Unified => unified_hunk_starts(hunks),
             DiffViewMode::SideBySide => cache.hunk_start_rows(self.selected_file).to_vec(),
@@ -888,11 +1008,9 @@ fn map_scroll(scroll: usize, from_starts: &[usize], to_starts: &[usize]) -> usiz
     let to_hunk_len = to_hunk_end - to_hunk_start;
 
     let offset_in_hunk = scroll - from_hunk_start;
-    let mapped_offset = if from_hunk_len > 0 {
-        offset_in_hunk * to_hunk_len / from_hunk_len
-    } else {
-        0
-    };
+    let mapped_offset = (offset_in_hunk * to_hunk_len)
+        .checked_div(from_hunk_len)
+        .unwrap_or_default();
 
     to_hunk_start + mapped_offset
 }
@@ -1272,6 +1390,30 @@ mod tests {
     }
 
     #[test]
+    fn toggle_viewed_reports_both_directions() {
+        let mut diff = make_diff(vec![make_file("a.rs", vec![])]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+
+        let on = app.toggle_viewed_entry(&mut diff, &visible);
+        assert_eq!(on.newly_viewed, vec![0]);
+        assert!(on.newly_unviewed.is_empty());
+
+        // Unviewing must be reported too, so the caller can unstage.
+        let off = app.toggle_viewed_entry(&mut diff, &visible);
+        assert!(off.newly_viewed.is_empty());
+        assert_eq!(off.newly_unviewed, vec![0]);
+    }
+
+    #[test]
+    fn toggle_viewed_on_empty_diff_reports_nothing() {
+        let mut diff = make_diff(vec![]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        assert!(app.toggle_viewed_entry(&mut diff, &visible).is_empty());
+    }
+
+    #[test]
     fn toggle_viewed_folder_marks_all_children() {
         let mut diff = make_diff(vec![
             make_file("src/a.rs", vec![]),
@@ -1286,6 +1428,39 @@ mod tests {
     }
 
     #[test]
+    fn toggle_viewed_folder_reports_only_actual_changes() {
+        let mut diff = make_diff(vec![
+            make_file("src/a.rs", vec![]),
+            make_file("src/b.rs", vec![]),
+        ]);
+        diff.files[0].viewed = true;
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+
+        // Not all children are viewed, so this marks the rest — a.rs was
+        // already viewed and must not be reported (and so not re-staged).
+        let change = app.toggle_viewed_entry(&mut diff, &visible);
+        assert_eq!(change.newly_viewed, vec![1]);
+        assert!(change.newly_unviewed.is_empty());
+
+        // Now all are viewed, so toggling clears both.
+        let change = app.toggle_viewed_entry(&mut diff, &visible);
+        assert_eq!(change.newly_unviewed, vec![0, 1]);
+        assert!(change.newly_viewed.is_empty());
+    }
+
+    #[test]
+    fn revert_viewed_restores_flag() {
+        let mut diff = make_diff(vec![make_file("a.rs", vec![])]);
+        let mut app = App::new();
+        diff.files[0].viewed = true;
+        app.revert_viewed(&mut diff, 0, false);
+        assert!(!diff.files[0].viewed);
+        // Out-of-range index must be a no-op, not a panic.
+        app.revert_viewed(&mut diff, 99, true);
+    }
+
+    #[test]
     fn mark_viewed_and_next_advances() {
         let mut diff = make_diff(vec![
             make_file("a.rs", vec![make_hunk("@@", vec![])]),
@@ -1296,6 +1471,176 @@ mod tests {
         app.mark_viewed_and_next(&mut diff, &visible);
         assert!(diff.files[0].viewed);
         assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
+    fn mark_viewed_and_next_on_empty_diff_does_not_panic() {
+        let mut diff = make_diff(vec![]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        assert_eq!(app.mark_viewed_and_next(&mut diff, &visible), None);
+    }
+
+    #[test]
+    fn mark_viewed_and_next_on_folder_entry_marks_displayed_file() {
+        // The cursor sits on the "src" folder, but the diff panel is showing
+        // file 0, so that is what gets marked.
+        let mut diff = make_diff(vec![make_file("src/a.rs", vec![])]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        assert!(matches!(
+            visible[0].kind,
+            crate::tree::FlatEntryKind::Folder { .. }
+        ));
+        assert_eq!(app.mark_viewed_and_next(&mut diff, &visible), Some(0));
+        assert!(diff.files[0].viewed);
+    }
+
+    #[test]
+    fn mark_viewed_and_next_with_stale_selection_does_not_panic() {
+        // selected/selected_file point past the end of a shrunken diff.
+        let mut diff = make_diff(vec![]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.selected = 4;
+        app.selected_file = 4;
+        assert_eq!(app.mark_viewed_and_next(&mut diff, &visible), None);
+    }
+
+    #[test]
+    fn mark_viewed_and_next_on_last_file_stays_put() {
+        let mut diff = make_diff(vec![make_file("a.rs", vec![]), make_file("b.rs", vec![])]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.selected = 1;
+        app.selected_file = 1;
+        assert_eq!(app.mark_viewed_and_next(&mut diff, &visible), Some(1));
+        assert!(diff.files[1].viewed);
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn select_prev_file_with_stale_selection_does_not_panic() {
+        let visible: Vec<FlatEntry> = Vec::new();
+        let mut app = App::new();
+        app.selected = 3;
+        app.select_prev_file(&visible);
+        assert_eq!(app.selected, 3);
+    }
+
+    #[test]
+    fn select_prev_file_moves_to_previous_file() {
+        let diff = make_diff(vec![make_file("a.rs", vec![]), make_file("b.rs", vec![])]);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.selected = 1;
+        app.selected_file = 1;
+        app.select_prev_file(&visible);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected_file, 0);
+    }
+
+    // ── Selection resync after a diff refresh ──
+
+    #[test]
+    fn resync_selection_follows_file_when_earlier_file_is_added() {
+        // The user is reading c.rs (index 1). A refresh brings in b.rs, which
+        // sorts before it and shifts c.rs to index 2.
+        let before = make_diff(vec![make_file("a.rs", vec![]), make_file("c.rs", vec![])]);
+        let mut app = App::new();
+        app.selected_file = 1;
+        app.selected = 1;
+        let path = app.selected_path(&before).map(str::to_owned);
+        assert_eq!(path.as_deref(), Some("c.rs"));
+
+        let after = make_diff(vec![
+            make_file("a.rs", vec![]),
+            make_file("b.rs", vec![]),
+            make_file("c.rs", vec![]),
+        ]);
+        let visible = flat_entries_for(&after);
+        app.resync_selection(path.as_deref(), &after, &visible);
+
+        assert_eq!(after.files[app.selected_file].path, "c.rs");
+        assert!(
+            matches!(visible[app.selected].kind, FlatEntryKind::File { file_index, .. } if file_index == app.selected_file)
+        );
+    }
+
+    #[test]
+    fn resync_selection_follows_file_when_earlier_file_is_removed() {
+        let before = make_diff(vec![
+            make_file("a.rs", vec![]),
+            make_file("b.rs", vec![]),
+            make_file("c.rs", vec![]),
+        ]);
+        let mut app = App::new();
+        app.selected_file = 2;
+        app.selected = 2;
+        let path = app.selected_path(&before).map(str::to_owned);
+
+        let after = make_diff(vec![make_file("a.rs", vec![]), make_file("c.rs", vec![])]);
+        let visible = flat_entries_for(&after);
+        app.resync_selection(path.as_deref(), &after, &visible);
+
+        assert_eq!(after.files[app.selected_file].path, "c.rs");
+        assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
+    fn resync_selection_clamps_when_file_disappears() {
+        let before = make_diff(vec![
+            make_file("a.rs", vec![]),
+            make_file("gone.rs", vec![]),
+        ]);
+        let mut app = App::new();
+        app.selected_file = 1;
+        app.selected = 1;
+        let path = app.selected_path(&before).map(str::to_owned);
+
+        let after = make_diff(vec![make_file("a.rs", vec![])]);
+        let visible = flat_entries_for(&after);
+        app.resync_selection(path.as_deref(), &after, &visible);
+
+        assert_eq!(app.selected_file, 0);
+        assert!(app.selected < visible.len());
+    }
+
+    #[test]
+    fn resync_selection_handles_empty_diff() {
+        let before = make_diff(vec![make_file("a.rs", vec![])]);
+        let mut app = App::new();
+        app.selected_file = 0;
+        app.selected = 0;
+        let path = app.selected_path(&before).map(str::to_owned);
+
+        let after = make_diff(vec![]);
+        let visible = flat_entries_for(&after);
+        app.resync_selection(path.as_deref(), &after, &visible);
+
+        assert_eq!(app.selected_file, 0);
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn resync_selection_keeps_cursor_on_nested_path() {
+        let before = make_diff(vec![make_file("src/z.rs", vec![])]);
+        let mut app = App::new();
+        app.selected_file = 0;
+        app.selected = 1; // 0 is the "src" folder
+        let path = app.selected_path(&before).map(str::to_owned);
+
+        let after = make_diff(vec![
+            make_file("src/a.rs", vec![]),
+            make_file("src/z.rs", vec![]),
+        ]);
+        let visible = flat_entries_for(&after);
+        app.resync_selection(path.as_deref(), &after, &visible);
+
+        assert_eq!(after.files[app.selected_file].path, "src/z.rs");
+        assert!(
+            matches!(visible[app.selected].kind, FlatEntryKind::File { file_index, .. } if file_index == app.selected_file)
+        );
     }
 
     // ── Hunk navigation ──
@@ -1740,14 +2085,24 @@ mod tests {
     #[test]
     fn diff_summary_counts_viewed_added_removed() {
         let mut diff = make_diff(vec![
-            make_file("a.rs", vec![make_hunk("@@", vec![
-                make_line(LineKind::Added, "x", None, Some(1)),
-                make_line(LineKind::Added, "y", None, Some(2)),
-                make_line(LineKind::Removed, "z", Some(1), None),
-            ])]),
-            make_file("b.rs", vec![make_hunk("@@", vec![
-                make_line(LineKind::Added, "p", None, Some(1)),
-            ])]),
+            make_file(
+                "a.rs",
+                vec![make_hunk(
+                    "@@",
+                    vec![
+                        make_line(LineKind::Added, "x", None, Some(1)),
+                        make_line(LineKind::Added, "y", None, Some(2)),
+                        make_line(LineKind::Removed, "z", Some(1), None),
+                    ],
+                )],
+            ),
+            make_file(
+                "b.rs",
+                vec![make_hunk(
+                    "@@",
+                    vec![make_line(LineKind::Added, "p", None, Some(1))],
+                )],
+            ),
         ]);
         diff.files[0].viewed = true;
 

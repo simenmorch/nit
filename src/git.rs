@@ -15,12 +15,40 @@ pub fn open_repo() -> Result<Repository> {
 pub fn stage_file(repo: &Repository, path: &str, deleted: bool) -> Result<()> {
     let mut index = repo.index().context("failed to open index")?;
     if deleted {
-        index.remove_path(Path::new(path)).context("failed to remove path from index")?;
+        index
+            .remove_path(Path::new(path))
+            .context("failed to remove path from index")?;
     } else {
-        index.add_path(Path::new(path)).context("failed to add path to index")?;
+        index
+            .add_path(Path::new(path))
+            .context("failed to add path to index")?;
     }
     index.write().context("failed to write index")?;
     Ok(())
+}
+
+/// Unstage a file, restoring its index entry to the HEAD version.
+/// Equivalent to `git reset HEAD -- <path>`. On an unborn branch (no commits
+/// yet) there is nothing to reset to, so the entry is removed from the index.
+pub fn unstage_file(repo: &Repository, path: &str) -> Result<()> {
+    match repo.head() {
+        Ok(head) => {
+            let obj = head
+                .peel(git2::ObjectType::Commit)
+                .context("failed to peel HEAD to a commit")?;
+            repo.reset_default(Some(&obj), [Path::new(path)])
+                .with_context(|| format!("failed to unstage '{}'", path))
+        }
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+            let mut index = repo.index().context("failed to open index")?;
+            index
+                .remove_path(Path::new(path))
+                .with_context(|| format!("failed to unstage '{}'", path))?;
+            index.write().context("failed to write index")?;
+            Ok(())
+        }
+        Err(e) => Err(e).context("failed to read HEAD"),
+    }
 }
 
 /// Create a commit from the current index (staged changes) with the given message.
@@ -81,7 +109,12 @@ pub fn list_branches_detailed(repo: &Repository) -> Result<Vec<BranchInfo>> {
             } else {
                 (String::new(), String::new())
             };
-            let info = BranchInfo { name: name.to_string(), is_head, short_oid, message };
+            let info = BranchInfo {
+                name: name.to_string(),
+                is_head,
+                short_oid,
+                message,
+            };
             if is_head {
                 current.push(info);
             } else {
@@ -238,24 +271,54 @@ fn head_tree(repo: &Repository) -> Result<Option<git2::Tree<'_>>> {
     }
 }
 
+/// Number of context lines shown around each change. Deliberately 5 rather than
+/// git's default of 3, to match GitHub's presentation.
+const CONTEXT_LINES: u32 = 5;
+
+/// Shared diff options for every diff we produce, so the context setting cannot
+/// drift between the uncommitted / commit / range paths.
+fn diff_opts() -> DiffOptions {
+    let mut opts = DiffOptions::new();
+    opts.context_lines(CONTEXT_LINES);
+    opts
+}
+
+/// Resolve a revision to its tree.
+fn resolve_tree<'a>(repo: &'a Repository, rev: &str) -> Result<git2::Tree<'a>> {
+    repo.revparse_single(rev)
+        .with_context(|| format!("could not resolve '{}'", rev))?
+        .peel_to_tree()
+        .with_context(|| format!("'{}' does not point to a tree", rev))
+}
+
+/// Run rename/copy detection, then convert into our Diff model.
+///
+/// libgit2 never reports `Delta::Renamed` unless `find_similar` has been called,
+/// so without this every rename would show up as a delete plus an add — which is
+/// also how it would disagree with the GitHub provider on the same change.
+fn finish_diff(diff: &mut git2::Diff) -> Result<model::Diff> {
+    diff.find_similar(None)
+        .context("failed to detect renames")?;
+    build_diff(diff)
+}
+
 /// Read all uncommitted changes (staged + unstaged) and return our Diff model.
 pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
     let tree = head_tree(repo)?;
 
-    let mut opts = DiffOptions::new();
-    opts.context_lines(5);
+    let mut opts = diff_opts();
     opts.include_untracked(true);
     opts.recurse_untracked_dirs(true);
     opts.show_untracked_content(true);
 
-    let diff = repo
+    let mut diff = repo
         .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
         .context("failed to compute diff")?;
 
-    build_diff(&diff)
+    finish_diff(&mut diff)
 }
 
-/// Diff a single commit against its parent.
+/// Diff a single commit against its first parent.
 pub fn get_commit_diff(repo: &Repository, rev: &str) -> Result<model::Diff> {
     let obj = repo
         .revparse_single(rev)
@@ -267,53 +330,50 @@ pub fn get_commit_diff(repo: &Repository, rev: &str) -> Result<model::Diff> {
 
     let new_tree = commit.tree().context("failed to get commit tree")?;
 
-    // Get parent tree (None for root commit = diff against empty tree)
+    // Get parent tree (None for root commit = diff against empty tree).
+    // For a merge commit this diffs against the first parent only, matching
+    // `git show` without `-m`.
     let parent_tree = if commit.parent_count() > 0 {
-        Some(commit.parent(0)?.tree()?)
+        Some(
+            commit
+                .parent(0)
+                .with_context(|| format!("failed to read parent of '{}'", rev))?
+                .tree()
+                .with_context(|| format!("failed to read parent tree of '{}'", rev))?,
+        )
     } else {
         None
     };
 
-    let mut opts = DiffOptions::new();
-    opts.context_lines(5);
-
-    let diff = repo
-        .diff_tree_to_tree(parent_tree.as_ref(), Some(&new_tree), Some(&mut opts))
+    let mut diff = repo
+        .diff_tree_to_tree(
+            parent_tree.as_ref(),
+            Some(&new_tree),
+            Some(&mut diff_opts()),
+        )
         .context("failed to compute commit diff")?;
 
-    build_diff(&diff)
+    finish_diff(&mut diff)
 }
 
 /// Diff between two revisions.
 pub fn get_range_diff(repo: &Repository, from: &str, to: &str) -> Result<model::Diff> {
-    let from_obj = repo
-        .revparse_single(from)
-        .with_context(|| format!("could not resolve '{}'", from))?;
-    let to_obj = repo
-        .revparse_single(to)
-        .with_context(|| format!("could not resolve '{}'", to))?;
+    let from_tree = resolve_tree(repo, from)?;
+    let to_tree = resolve_tree(repo, to)?;
 
-    let from_tree = from_obj
-        .peel_to_tree()
-        .with_context(|| format!("'{}' does not point to a tree", from))?;
-    let to_tree = to_obj
-        .peel_to_tree()
-        .with_context(|| format!("'{}' does not point to a tree", to))?;
-
-    let mut opts = DiffOptions::new();
-    opts.context_lines(5);
-
-    let diff = repo
-        .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut opts))
+    let mut diff = repo
+        .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut diff_opts()))
         .context("failed to compute range diff")?;
 
-    build_diff(&diff)
+    finish_diff(&mut diff)
 }
 
 /// List recent commits from HEAD.
 pub fn get_commit_log(repo: &Repository, limit: usize) -> Result<Vec<model::CommitInfo>> {
     let mut revwalk = repo.revwalk().context("failed to create revwalk")?;
-    revwalk.push_head().context("failed to push HEAD to revwalk")?;
+    revwalk
+        .push_head()
+        .context("failed to push HEAD to revwalk")?;
     revwalk.set_sorting(Sort::TIME | Sort::TOPOLOGICAL)?;
 
     let now = SystemTime::now()
@@ -326,15 +386,8 @@ pub fn get_commit_log(repo: &Repository, limit: usize) -> Result<Vec<model::Comm
         let oid = oid_result.context("revwalk error")?;
         let commit = repo.find_commit(oid).context("failed to find commit")?;
 
-        let message = commit
-            .summary()
-            .unwrap_or("(no message)")
-            .to_string();
-        let author = commit
-            .author()
-            .name()
-            .unwrap_or("(unknown)")
-            .to_string();
+        let message = commit.summary().unwrap_or("(no message)").to_string();
+        let author = commit.author().name().unwrap_or("(unknown)").to_string();
         let date = format_relative_time(now - commit.time().seconds());
 
         let full_oid = oid.to_string();
@@ -414,8 +467,7 @@ fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
         let mut removed: usize = 0;
 
         if !is_binary {
-            let patch = git2::Patch::from_diff(diff, delta_idx)
-                .context("failed to get patch")?;
+            let patch = git2::Patch::from_diff(diff, delta_idx).context("failed to get patch")?;
 
             if let Some(patch) = patch {
                 for hunk_idx in 0..patch.num_hunks() {
@@ -440,8 +492,7 @@ fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
                             _ => model::LineKind::Context,
                         };
 
-                        let content =
-                            String::from_utf8_lossy(line.content()).into_owned();
+                        let content = String::from_utf8_lossy(line.content()).into_owned();
 
                         lines.push(model::Line {
                             kind,
@@ -543,7 +594,137 @@ mod tests {
             .unwrap()
     }
 
+    // ── Staging ──
+
+    #[test]
+    fn stage_file_adds_to_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "init.txt", "init", "initial commit");
+        fs::write(dir.path().join("new.txt"), "hello").unwrap();
+
+        stage_file(&repo, "new.txt", false).unwrap();
+
+        let staged = get_staged_files(&repo).unwrap();
+        assert!(staged.contains("new.txt"));
+    }
+
+    #[test]
+    fn stage_file_removes_deleted_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "gone.txt", "bye", "initial commit");
+        fs::remove_file(dir.path().join("gone.txt")).unwrap();
+
+        stage_file(&repo, "gone.txt", true).unwrap();
+
+        let staged = get_staged_files(&repo).unwrap();
+        assert!(staged.contains("gone.txt"));
+    }
+
+    #[test]
+    fn stage_file_reports_error_for_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "init.txt", "init", "initial commit");
+
+        // Adding a path that does not exist in the worktree must fail loudly.
+        let err = stage_file(&repo, "does-not-exist.txt", false).unwrap_err();
+        assert!(err.to_string().contains("failed to add path to index"));
+    }
+
+    #[test]
+    fn unstage_file_restores_head_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "original", "initial commit");
+
+        fs::write(dir.path().join("a.txt"), "modified").unwrap();
+        stage_file(&repo, "a.txt", false).unwrap();
+        assert!(get_staged_files(&repo).unwrap().contains("a.txt"));
+
+        unstage_file(&repo, "a.txt").unwrap();
+        assert!(!get_staged_files(&repo).unwrap().contains("a.txt"));
+    }
+
+    #[test]
+    fn unstage_file_removes_newly_added_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "init.txt", "init", "initial commit");
+
+        fs::write(dir.path().join("new.txt"), "hello").unwrap();
+        stage_file(&repo, "new.txt", false).unwrap();
+        assert!(get_staged_files(&repo).unwrap().contains("new.txt"));
+
+        unstage_file(&repo, "new.txt").unwrap();
+        assert!(!get_staged_files(&repo).unwrap().contains("new.txt"));
+        // The worktree file must survive an unstage.
+        assert!(dir.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn unstage_file_on_unborn_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        fs::write(dir.path().join("first.txt"), "hello").unwrap();
+        stage_file(&repo, "first.txt", false).unwrap();
+        assert!(get_staged_files(&repo).unwrap().contains("first.txt"));
+
+        unstage_file(&repo, "first.txt").unwrap();
+        assert!(!get_staged_files(&repo).unwrap().contains("first.txt"));
+        assert!(dir.path().join("first.txt").exists());
+    }
+
+    #[test]
+    fn stage_then_unstage_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one", "initial commit");
+        fs::write(dir.path().join("a.txt"), "two").unwrap();
+
+        for _ in 0..3 {
+            stage_file(&repo, "a.txt", false).unwrap();
+            assert!(get_staged_files(&repo).unwrap().contains("a.txt"));
+            unstage_file(&repo, "a.txt").unwrap();
+            assert!(!get_staged_files(&repo).unwrap().contains("a.txt"));
+        }
+    }
+
     // ── Diff with temp repos ──
+
+    #[test]
+    fn commit_diff_detects_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path());
+        let body: String = (0..20).map(|i| format!("line {}\n", i)).collect();
+        commit_file(&repo, "old_name.txt", &body, "initial commit");
+
+        // Rename without changing content.
+        fs::remove_file(dir.path().join("old_name.txt")).unwrap();
+        fs::write(dir.path().join("new_name.txt"), &body).unwrap();
+        let mut index = repo.index().unwrap();
+        index.remove_path(Path::new("old_name.txt")).unwrap();
+        index.add_path(Path::new("new_name.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = repo.signature().unwrap();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "rename", &tree, &[&parent])
+            .unwrap();
+
+        let diff = get_commit_diff(&repo, &oid.to_string()).unwrap();
+
+        // Without find_similar this would be two entries: a delete and an add.
+        assert_eq!(diff.files.len(), 1, "rename must collapse into one entry");
+        assert_eq!(diff.files[0].path, "new_name.txt");
+        match &diff.files[0].status {
+            model::FileStatus::Renamed { from } => assert_eq!(from, "old_name.txt"),
+            other => panic!("expected Renamed, got {:?}", other),
+        }
+    }
 
     #[test]
     fn uncommitted_diff_new_file() {

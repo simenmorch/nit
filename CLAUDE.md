@@ -13,7 +13,9 @@ cargo run -- 'abc123..def456' # commit range
 cargo run -- '#42'           # GitHub PR (current repo)
 cargo run -- 'owner/repo#42' # GitHub PR (any repo)
 cargo clippy                 # lint
-cargo test --lib             # run tests (147 unit tests across modules)
+cargo fmt                    # format (keep the tree clean)
+cargo test                   # run all tests (202 unit + 5 integration)
+cargo test --lib             # unit tests only
 ```
 
 GitHub PR mode requires a token: set `GITHUB_TOKEN` or have `gh` CLI authenticated.
@@ -43,7 +45,7 @@ See [docs/ubiquitous-language.md](docs/ubiquitous-language.md) for definitions o
 - **`app.rs`** — UI state (`App` struct): selection, scroll, focus, search, view mode, tabs, modals (commit, branch, confirm, help, PR filter). All state mutation lives here.
 - **`ui.rs`** — Stateless rendering. Reads `App` + `Diff`, draws tab bar, sidebar, diff (unified + split), commit list, PR list, modals, status bar. Owns syntax highlighting via syntect.
 - **`split.rs`** — Side-by-side diff logic: converts hunks into `SplitRow`s (paired/left-only/right-only) with character-level inline diff spans via the `similar` crate.
-- **`tree.rs`** — `FileTree`: builds a hierarchical tree from flat file paths, flattens it for rendering with collapsible folders (folders sorted before files).
+- **`tree.rs`** — `FileTree`: builds a hierarchical tree from flat file paths, flattens it for rendering with collapsible folders (folders sorted before files). Folders and files are kept in separate maps so a segment can be both (e.g. deleting file `foo` while adding `foo/bar.rs`).
 - **`provider.rs`** — `RemoteProvider` trait + shared types (`Comment`, `PrMetadata`, `PrState`).
 - **`config.rs`** — TOML config loading from `~/.config/nit/nit.toml`. Supports syntax theme selection (bundled, `.tmTheme`, `.sublime-color-scheme` files in `~/.config/nit/themes/`) and full color customization via hex values.
 - **`lib.rs`** — Crate root, re-exports all modules.
@@ -53,7 +55,10 @@ See [docs/ubiquitous-language.md](docs/ubiquitous-language.md) for definitions o
 
 - Error handling uses `anyhow::Result` with `.context()` throughout. Fatal errors (no repo, no token) print to stderr and exit before TUI launch.
 - State and rendering are strictly separated: `App` handles all state transitions, `ui::draw()` is a pure read. This is intentional for testability.
-- Diff context is 5 lines (not git's default 3) to match GitHub's style.
+- Diff context is 5 lines (not git's default 3) to match GitHub's style — see `git::CONTEXT_LINES`, applied via `git::diff_opts()` so it cannot drift between diff paths.
+- All local diffs run through `git::finish_diff`, which calls `find_similar` — libgit2 never reports renames without it.
 - `Option<usize>` for line numbers — no sentinel values. `None` means the line doesn't exist in that version.
-- `viewed` on `DiffFile` maps to git staging in default (uncommitted) mode — toggling viewed stages/unstages the file.
+- `viewed` on `DiffFile` maps to git staging in default (uncommitted) mode — toggling viewed stages/unstages the file. `toggle_viewed_entry` returns a `ViewedChange` describing both directions; `main::sync_index_with_viewed` applies it and rolls the flag back if the index operation fails, so the UI never claims a file is staged when it is not.
+- `file_index` in `FlatEntry` is *positional*. After the diff is replaced, use `App::resync_selection` to re-resolve the selection by path — clamping alone would silently point at a different file.
+- Column layout in `ui.rs` uses `display_width`/`truncate_to_width`/`pad_to_width` (unicode-width), not `str::len` or `chars().count()`. Both disagree with what ratatui measures.
 - The event loop drains all queued key events before redrawing, for responsiveness.

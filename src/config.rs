@@ -110,7 +110,9 @@ fn parse_hex_color(s: &str) -> std::result::Result<Color, String> {
     Ok(Color::Rgb(r, g, b))
 }
 
-fn deserialize_optional_hex_color<'de, D>(deserializer: D) -> std::result::Result<Option<Color>, D::Error>
+fn deserialize_optional_hex_color<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Color>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -255,7 +257,10 @@ mod tests {
 
     #[test]
     fn parse_hex_mixed_case() {
-        assert_eq!(parse_hex_color("#aaBBcc").unwrap(), Color::Rgb(170, 187, 204));
+        assert_eq!(
+            parse_hex_color("#aaBBcc").unwrap(),
+            Color::Rgb(170, 187, 204)
+        );
     }
 
     #[test]

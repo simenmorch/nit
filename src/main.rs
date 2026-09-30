@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::time::Duration;
-//test
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,6 +9,13 @@ use syntect::parsing::SyntaxSet;
 
 use nit::{app, cache, config, git, github, model, provider, tree, ui};
 use provider::RemoteProvider;
+
+/// How many commits to load into the Commits tab. Used both at startup and on
+/// every reload, so the list cannot silently shrink after a pull.
+const COMMIT_LOG_LIMIT: usize = 500;
+
+/// How many pull requests to fetch for the PRs tab.
+const PR_LIST_LIMIT: usize = 100;
 
 #[derive(Parser)]
 #[command(name = "nit", about = "Terminal code review tool")]
@@ -40,7 +46,7 @@ fn main() -> Result<()> {
             let diff = git::get_range_diff(&repo, parts[0], parts[1])?;
             (diff, rev.to_string())
         }
-        Some(rev) if rev.starts_with('#') || rev.contains('#') => {
+        Some(rev) if rev.contains('#') => {
             let (owner, repo_name, pr_number) = parse_pr_ref(rev, &repo)?;
             let provider = github::GitHubProvider::new(owner.clone(), repo_name.clone())?;
             let diff = provider.fetch_diff(&pr_number)?;
@@ -61,7 +67,7 @@ fn main() -> Result<()> {
         }
     };
 
-    let commits = git::get_commit_log(&repo, 500).unwrap_or_default();
+    let commits = git::get_commit_log(&repo, COMMIT_LOG_LIMIT).unwrap_or_default();
 
     let github_remote = git::owner_repo_from_remote(&repo).ok();
 
@@ -179,27 +185,28 @@ fn handle_key(
                 }
                 KeyCode::Backspace => {
                     let row = app.commit_cursor;
-                    if app.commit_description[row].is_empty() {
-                        if row > 0 {
+                    match app.commit_description.get_mut(row) {
+                        Some(line) if line.is_empty() && row > 0 => {
                             app.commit_description.remove(row);
                             app.commit_cursor -= 1;
                         }
-                    } else {
-                        app.commit_description[row].pop();
+                        Some(line) => {
+                            line.pop();
+                        }
+                        None => {}
                     }
                 }
                 KeyCode::Up => {
-                    if app.commit_cursor > 0 {
-                        app.commit_cursor -= 1;
-                    }
+                    app.commit_cursor = app.commit_cursor.saturating_sub(1);
                 }
                 KeyCode::Down => {
-                    if app.commit_cursor + 1 < app.commit_description.len() {
-                        app.commit_cursor += 1;
-                    }
+                    let last = app.commit_description.len().saturating_sub(1);
+                    app.commit_cursor = (app.commit_cursor + 1).min(last);
                 }
                 KeyCode::Char(c) => {
-                    app.commit_description[app.commit_cursor].push(c);
+                    if let Some(line) = app.commit_description.get_mut(app.commit_cursor) {
+                        line.push(c);
+                    }
                 }
                 _ => {}
             },
@@ -338,7 +345,10 @@ fn handle_key(
             }
             return KeyAction::Continue;
         }
-        KeyCode::Char('p') if matches!(app.review_mode, app::ReviewMode::WorkingTree) && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('p')
+            if matches!(app.review_mode, app::ReviewMode::WorkingTree)
+                && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
             app.confirm = Some(app::ConfirmModal {
                 open: true,
                 message: "Pull from remote?".to_string(),
@@ -359,9 +369,16 @@ fn handle_key(
 
     // Tab-specific dispatch
     match app.active_tab {
-        app::Tab::Diff => {
-            handle_diff_tab_key(key, app, diff, visible, content_height, viewport_height, repo, diff_cache)
-        }
+        app::Tab::Diff => handle_diff_tab_key(
+            key,
+            app,
+            diff,
+            visible,
+            content_height,
+            viewport_height,
+            repo,
+            diff_cache,
+        ),
         app::Tab::Commits => handle_commits_tab_key(key, app, viewport_height),
         app::Tab::PRs => handle_prs_tab_key(key, app, viewport_height),
     }
@@ -438,22 +455,21 @@ fn handle_diff_tab_key(
             return KeyAction::Continue;
         }
         KeyCode::Char(' ') => {
-            let newly_viewed = app.toggle_viewed_entry(diff, visible);
+            let change = app.toggle_viewed_entry(diff, visible);
             if matches!(app.review_mode, app::ReviewMode::WorkingTree) {
-                for idx in newly_viewed {
-                    let file = &diff.files[idx];
-                    let deleted = matches!(file.status, model::FileStatus::Deleted);
-                    let _ = git::stage_file(repo, &file.path, deleted);
-                }
+                sync_index_with_viewed(app, diff, repo, &change);
             }
             return KeyAction::Continue;
         }
         KeyCode::Char('V') => {
-            let idx = app.mark_viewed_and_next(diff, visible);
-            if matches!(app.review_mode, app::ReviewMode::WorkingTree) {
-                let file = &diff.files[idx];
-                let deleted = matches!(file.status, model::FileStatus::Deleted);
-                let _ = git::stage_file(repo, &file.path, deleted);
+            if let Some(idx) = app.mark_viewed_and_next(diff, visible)
+                && matches!(app.review_mode, app::ReviewMode::WorkingTree)
+            {
+                let change = app::ViewedChange {
+                    newly_viewed: vec![idx],
+                    newly_unviewed: Vec::new(),
+                };
+                sync_index_with_viewed(app, diff, repo, &change);
             }
             return KeyAction::Continue;
         }
@@ -508,7 +524,10 @@ fn handle_diff_tab_key(
             KeyCode::Esc => {
                 if app.search.is_some() {
                     app.clear_search();
-                } else if matches!(app.review_mode, app::ReviewMode::Commit { .. } | app::ReviewMode::PullRequest { .. }) {
+                } else if matches!(
+                    app.review_mode,
+                    app::ReviewMode::Commit { .. } | app::ReviewMode::PullRequest { .. }
+                ) {
                     return KeyAction::ReturnToDefault;
                 }
             }
@@ -525,7 +544,10 @@ fn handle_diff_tab_key(
             KeyCode::Esc => {
                 if app.search.is_some() {
                     app.clear_search();
-                } else if matches!(app.review_mode, app::ReviewMode::Commit { .. } | app::ReviewMode::PullRequest { .. }) {
+                } else if matches!(
+                    app.review_mode,
+                    app::ReviewMode::Commit { .. } | app::ReviewMode::PullRequest { .. }
+                ) {
                     return KeyAction::ReturnToDefault;
                 }
             }
@@ -536,10 +558,50 @@ fn handle_diff_tab_key(
     KeyAction::Continue
 }
 
+/// Apply a `viewed` change to the git index. In working-tree mode `viewed`
+/// means "staged", so the two must not drift apart: if the index operation
+/// fails, the flag is rolled back and the error surfaced, rather than leaving
+/// the UI claiming a file is staged when it is not.
+fn sync_index_with_viewed(
+    app: &mut app::App,
+    diff: &mut model::Diff,
+    repo: &git2::Repository,
+    change: &app::ViewedChange,
+) {
+    let mut failures: Vec<String> = Vec::new();
+
+    for &idx in &change.newly_viewed {
+        let Some(file) = diff.files.get(idx) else {
+            continue;
+        };
+        let deleted = matches!(file.status, model::FileStatus::Deleted);
+        if let Err(e) = git::stage_file(repo, &file.path, deleted) {
+            failures.push(format!("{}: {}", file.path, e));
+            app.revert_viewed(diff, idx, false);
+        }
+    }
+
+    for &idx in &change.newly_unviewed {
+        let Some(file) = diff.files.get(idx) else {
+            continue;
+        };
+        if let Err(e) = git::unstage_file(repo, &file.path) {
+            failures.push(format!("{}: {}", file.path, e));
+            app.revert_viewed(diff, idx, true);
+        }
+    }
+
+    if !failures.is_empty() {
+        app.status_message = Some(format!("Staging failed — {}", failures.join("; ")));
+    }
+}
+
 fn resolve_line_number(app: &app::App, file: &model::DiffFile) -> Option<usize> {
     if matches!(app.focus, app::Focus::Sidebar) {
         // When focused on sidebar, just open at line 1
-        return file.hunks.first()
+        return file
+            .hunks
+            .first()
             .and_then(|h| h.lines.first())
             .and_then(|l| l.new_num);
     }
@@ -742,8 +804,7 @@ fn run(
         let sidebar_height = (terminal.size()?.height as usize).saturating_sub(2);
         app.ensure_sidebar_visible(sidebar_height);
 
-        terminal
-            .draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
+        terminal.draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
 
         let viewport_height = terminal.size()?.height as usize;
 
@@ -775,13 +836,13 @@ fn run(
                             }
                         }
                     }
+                    let previous_path = app.selected_path(&diff).map(str::to_owned);
                     diff = new_diff;
                     tree = tree::FileTree::from_files(&diff.files);
                     diff_cache = cache::DiffCache::new(&diff);
                     original_diff = diff.clone();
-                    if !diff.files.is_empty() && app.selected_file >= diff.files.len() {
-                        app.selected_file = diff.files.len() - 1;
-                    }
+                    let refreshed = tree.flatten(&app.collapsed);
+                    app.resync_selection(previous_path.as_deref(), &diff, &refreshed);
                 }
                 break;
             }
@@ -820,11 +881,12 @@ fn run(
                     KeyAction::GitPull => {
                         match git::git_pull(repo) {
                             Ok(output) => {
-                                let msg = if output.is_empty() || output.contains("Already up to date") {
-                                    "Already up to date".to_string()
-                                } else {
-                                    "Pull complete".to_string()
-                                };
+                                let msg =
+                                    if output.is_empty() || output.contains("Already up to date") {
+                                        "Already up to date".to_string()
+                                    } else {
+                                        "Pull complete".to_string()
+                                    };
                                 app.status_message = Some(msg);
                                 // Refresh diff after pull
                                 if let Ok(mut new_diff) = git::get_uncommitted_diff(repo) {
@@ -834,14 +896,22 @@ fn run(
                                             file.viewed = true;
                                         }
                                     }
+                                    let previous_path = app.selected_path(&diff).map(str::to_owned);
                                     diff = new_diff;
                                     tree = tree::FileTree::from_files(&diff.files);
                                     diff_cache = cache::DiffCache::new(&diff);
                                     original_diff = diff.clone();
+                                    let refreshed = tree.flatten(&app.collapsed);
+                                    app.resync_selection(
+                                        previous_path.as_deref(),
+                                        &diff,
+                                        &refreshed,
+                                    );
                                 }
                                 // Refresh commit log
-                                if let Ok(log) = git::get_commit_log(repo, 200) {
+                                if let Ok(log) = git::get_commit_log(repo, COMMIT_LOG_LIMIT) {
                                     app.commits = log;
+                                    app.clamp_commit_selection();
                                 }
                             }
                             Err(e) => {
@@ -874,15 +944,13 @@ fn run(
                         match cmd.status() {
                             Ok(status) => {
                                 if !status.success() {
-                                    app.status_message = Some(format!(
-                                        "Editor exited with: {}", status
-                                    ));
+                                    app.status_message =
+                                        Some(format!("Editor exited with: {}", status));
                                 }
                             }
                             Err(e) => {
-                                app.status_message = Some(format!(
-                                    "Failed to launch '{}': {}", editor, e
-                                ));
+                                app.status_message =
+                                    Some(format!("Failed to launch '{}': {}", editor, e));
                             }
                         }
                         *terminal = ratatui::init();
@@ -903,19 +971,16 @@ fn run(
                         break;
                     }
                     KeyAction::LoadCommitDiff(oid) => {
-                        let commit_info = app
-                            .commits
-                            .iter()
-                            .find(|c| c.oid == oid);
-                        let message = commit_info
-                            .map(|c| c.message.clone())
-                            .unwrap_or_default();
+                        let commit_info = app.commits.iter().find(|c| c.oid == oid);
+                        let message = commit_info.map(|c| c.message.clone()).unwrap_or_default();
                         let short_oid = commit_info
                             .map(|c| c.short_oid.clone())
                             .unwrap_or_else(|| oid[..7.min(oid.len())].to_string());
 
                         app.loading_message = Some(format!("Loading commit {}...", short_oid));
-                        terminal.draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
+                        terminal.draw(|frame| {
+                            ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors)
+                        })?;
                         app.loading_message = None;
 
                         match git::get_commit_diff(repo, &oid) {
@@ -925,8 +990,11 @@ fn run(
                                 diff_cache = cache::DiffCache::new(&diff);
                                 label = format!("{} {}", short_oid, message);
                                 app.reset_diff_state();
-                                app.review_mode =
-                                    app::ReviewMode::Commit { short_oid, message, return_tab: app::Tab::Commits };
+                                app.review_mode = app::ReviewMode::Commit {
+                                    short_oid,
+                                    message,
+                                    return_tab: app::Tab::Commits,
+                                };
                                 app.active_tab = app::Tab::Diff;
                             }
                             Err(e) => {
@@ -938,12 +1006,12 @@ fn run(
                     KeyAction::LoadPrDiff(number) => {
                         if let Some((ref owner, ref repo_name)) = github_remote {
                             let pr_info = app.prs.iter().find(|p| p.number == number);
-                            let title = pr_info
-                                .map(|p| p.title.clone())
-                                .unwrap_or_default();
+                            let title = pr_info.map(|p| p.title.clone()).unwrap_or_default();
 
                             app.loading_message = Some(format!("Loading PR #{}...", number));
-                            terminal.draw(|frame| ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors))?;
+                            terminal.draw(|frame| {
+                                ui::draw(frame, &app, &diff, &visible, &label, ss, theme, colors)
+                            })?;
                             app.loading_message = None;
 
                             match github::GitHubProvider::new(owner.clone(), repo_name.clone())
@@ -989,7 +1057,6 @@ fn run(
 
                 // Lazy-load PRs on first entry to the PR tab
                 if app.active_tab == app::Tab::PRs && !app.prs_loaded {
-                    app.prs_loaded = true;
                     if let Some((owner, repo_name)) = github_remote.clone() {
                         app.loading_message = Some("Loading PRs...".to_string());
                         terminal.draw(|frame| {
@@ -998,24 +1065,33 @@ fn run(
                         app.loading_message = None;
 
                         match github::GitHubProvider::new(owner, repo_name) {
-                            Ok(provider) => match provider.fetch_pr_list(100) {
+                            Ok(provider) => match provider.fetch_pr_list(PR_LIST_LIMIT) {
                                 Ok(prs) => {
                                     app.prs = prs;
+                                    app.clamp_pr_selection();
+                                    // Only mark as loaded on success, so a
+                                    // transient failure is retried when the
+                                    // user returns to this tab.
+                                    app.prs_loaded = true;
                                     if let Ok(user) = provider.fetch_authenticated_user() {
                                         app.pr_filter.github_user = Some(user);
                                     }
                                 }
                                 Err(e) => {
-                                    app.status_message =
-                                        Some(format!("Failed to load PRs: {}", e));
+                                    app.status_message = Some(format!("Failed to load PRs: {}", e));
                                 }
                             },
                             Err(e) => {
-                                app.status_message =
-                                    Some(format!("GitHub setup failed: {}", e));
+                                app.status_message = Some(format!("GitHub setup failed: {}", e));
                             }
                         }
                         break;
+                    } else {
+                        // No GitHub remote — nothing to load, and retrying will
+                        // not help, so stop asking.
+                        app.prs_loaded = true;
+                        app.status_message =
+                            Some("No GitHub remote found for this repository".to_string());
                     }
                 }
             }
@@ -1067,10 +1143,9 @@ fn diff_content_eq(a: &model::Diff, b: &model::Diff) -> bool {
 fn hunk_content_eq(a: &model::Hunk, b: &model::Hunk) -> bool {
     a.header == b.header
         && a.lines.len() == b.lines.len()
-        && a.lines
-            .iter()
-            .zip(b.lines.iter())
-            .all(|(la, lb)| la.content == lb.content && la.old_num == lb.old_num && la.new_num == lb.new_num)
+        && a.lines.iter().zip(b.lines.iter()).all(|(la, lb)| {
+            la.content == lb.content && la.old_num == lb.old_num && la.new_num == lb.new_num
+        })
 }
 
 /// Carry over `viewed` flags from the old diff to a new diff.
@@ -1090,17 +1165,25 @@ fn transfer_viewed(old: &model::Diff, new: &mut model::Diff) {
 /// Parse a PR reference into (owner, repo, pr_number).
 /// Supports: "#42", "owner/repo#42"
 fn parse_pr_ref(rev: &str, repo: &git2::Repository) -> Result<(String, String, String)> {
+    // Validate the number here rather than letting a nonsense value reach the
+    // GitHub API, where it surfaces as an opaque 404.
+    let validate = |n: &str| -> Result<String> {
+        if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+            anyhow::bail!("invalid PR number '{}' in '{}' — expected digits", n, rev);
+        }
+        Ok(n.to_string())
+    };
+
     if let Some(rest) = rev.strip_prefix('#') {
         // #42 — infer owner/repo from git remote
+        let pr_number = validate(rest)?;
         let (owner, repo_name) = git::owner_repo_from_remote(repo)?;
-        Ok((owner, repo_name, rest.to_string()))
-    } else if rev.contains('#') {
+        Ok((owner, repo_name, pr_number))
+    } else if let Some((slug, number)) = rev.split_once('#') {
         // owner/repo#42
-        let parts: Vec<&str> = rev.splitn(2, '#').collect();
-        let slug = parts[0];
-        let pr_number = parts[1];
+        let pr_number = validate(number)?;
         let slug_parts: Vec<&str> = slug.splitn(2, '/').collect();
-        if slug_parts.len() != 2 {
+        if slug_parts.len() != 2 || slug_parts[0].is_empty() || slug_parts[1].is_empty() {
             anyhow::bail!(
                 "invalid PR reference '{}' — expected owner/repo#number",
                 rev
@@ -1109,7 +1192,7 @@ fn parse_pr_ref(rev: &str, repo: &git2::Repository) -> Result<(String, String, S
         Ok((
             slug_parts[0].to_string(),
             slug_parts[1].to_string(),
-            pr_number.to_string(),
+            pr_number,
         ))
     } else {
         anyhow::bail!("invalid PR reference '{}'", rev);

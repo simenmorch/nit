@@ -1,9 +1,14 @@
 use std::collections::HashSet;
 
 use crate::model::{Diff, DiffFile, FileStatus, Hunk, Line, LineKind};
-use crate::tree::{FlatEntry, FileTree};
+use crate::tree::{FileTree, FlatEntry};
 
-pub fn make_line(kind: LineKind, content: &str, old_num: Option<usize>, new_num: Option<usize>) -> Line {
+pub fn make_line(
+    kind: LineKind,
+    content: &str,
+    old_num: Option<usize>,
+    new_num: Option<usize>,
+) -> Line {
     Line {
         kind,
         content: content.to_string(),

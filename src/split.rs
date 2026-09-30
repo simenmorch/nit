@@ -110,32 +110,56 @@ pub fn compute_inline_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<Inlin
         match tag {
             DiffTag::Equal => {
                 if old_end > old_start {
-                    old_spans.push(InlineSpan { start: old_start, end: old_end, changed: false });
+                    old_spans.push(InlineSpan {
+                        start: old_start,
+                        end: old_end,
+                        changed: false,
+                    });
                 }
                 if new_end > new_start {
-                    new_spans.push(InlineSpan { start: new_start, end: new_end, changed: false });
+                    new_spans.push(InlineSpan {
+                        start: new_start,
+                        end: new_end,
+                        changed: false,
+                    });
                 }
                 old_pos = old_end;
                 new_pos = new_end;
             }
             DiffTag::Delete => {
                 if old_end > old_start {
-                    old_spans.push(InlineSpan { start: old_start, end: old_end, changed: true });
+                    old_spans.push(InlineSpan {
+                        start: old_start,
+                        end: old_end,
+                        changed: true,
+                    });
                 }
                 old_pos = old_end;
             }
             DiffTag::Insert => {
                 if new_end > new_start {
-                    new_spans.push(InlineSpan { start: new_start, end: new_end, changed: true });
+                    new_spans.push(InlineSpan {
+                        start: new_start,
+                        end: new_end,
+                        changed: true,
+                    });
                 }
                 new_pos = new_end;
             }
             DiffTag::Replace => {
                 if old_end > old_start {
-                    old_spans.push(InlineSpan { start: old_start, end: old_end, changed: true });
+                    old_spans.push(InlineSpan {
+                        start: old_start,
+                        end: old_end,
+                        changed: true,
+                    });
                 }
                 if new_end > new_start {
-                    new_spans.push(InlineSpan { start: new_start, end: new_end, changed: true });
+                    new_spans.push(InlineSpan {
+                        start: new_start,
+                        end: new_end,
+                        changed: true,
+                    });
                 }
                 old_pos = old_end;
                 new_pos = new_end;
@@ -145,10 +169,18 @@ pub fn compute_inline_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<Inlin
 
     // Ensure trailing bytes are covered
     if old_pos < old.len() {
-        old_spans.push(InlineSpan { start: old_pos, end: old.len(), changed: false });
+        old_spans.push(InlineSpan {
+            start: old_pos,
+            end: old.len(),
+            changed: false,
+        });
     }
     if new_pos < new.len() {
-        new_spans.push(InlineSpan { start: new_pos, end: new.len(), changed: false });
+        new_spans.push(InlineSpan {
+            start: new_pos,
+            end: new.len(),
+            changed: false,
+        });
     }
 
     (old_spans, new_spans)
@@ -221,19 +253,30 @@ mod tests {
     use crate::model::{Hunk, Line, LineKind};
 
     fn line(kind: LineKind, content: &str, old: Option<usize>, new: Option<usize>) -> Line {
-        Line { kind, content: content.to_string(), old_num: old, new_num: new }
+        Line {
+            kind,
+            content: content.to_string(),
+            old_num: old,
+            new_num: new,
+        }
     }
 
     fn hunk(header: &str, lines: Vec<Line>) -> Hunk {
-        Hunk { header: header.to_string(), lines }
+        Hunk {
+            header: header.to_string(),
+            lines,
+        }
     }
 
     #[test]
     fn context_only() {
-        let hunks = vec![hunk("@@ -1 +1 @@", vec![
-            line(LineKind::Context, "a", Some(1), Some(1)),
-            line(LineKind::Context, "b", Some(2), Some(2)),
-        ])];
+        let hunks = vec![hunk(
+            "@@ -1 +1 @@",
+            vec![
+                line(LineKind::Context, "a", Some(1), Some(1)),
+                line(LineKind::Context, "b", Some(2), Some(2)),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 3); // header + 2 context
         assert!(matches!(rows[0], SplitRow::HunkHeader(_)));
@@ -243,10 +286,13 @@ mod tests {
 
     #[test]
     fn pure_add() {
-        let hunks = vec![hunk("@@", vec![
-            line(LineKind::Added, "new1", None, Some(1)),
-            line(LineKind::Added, "new2", None, Some(2)),
-        ])];
+        let hunks = vec![hunk(
+            "@@",
+            vec![
+                line(LineKind::Added, "new1", None, Some(1)),
+                line(LineKind::Added, "new2", None, Some(2)),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 3);
         assert!(matches!(rows[1], SplitRow::RightOnly(_)));
@@ -255,10 +301,13 @@ mod tests {
 
     #[test]
     fn pure_remove() {
-        let hunks = vec![hunk("@@", vec![
-            line(LineKind::Removed, "old1", Some(1), None),
-            line(LineKind::Removed, "old2", Some(2), None),
-        ])];
+        let hunks = vec![hunk(
+            "@@",
+            vec![
+                line(LineKind::Removed, "old1", Some(1), None),
+                line(LineKind::Removed, "old2", Some(2), None),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 3);
         assert!(matches!(rows[1], SplitRow::LeftOnly(_)));
@@ -267,14 +316,17 @@ mod tests {
 
     #[test]
     fn equal_pairing() {
-        let hunks = vec![hunk("@@", vec![
-            line(LineKind::Removed, "old1", Some(1), None),
-            line(LineKind::Removed, "old2", Some(2), None),
-            line(LineKind::Removed, "old3", Some(3), None),
-            line(LineKind::Added, "new1", None, Some(1)),
-            line(LineKind::Added, "new2", None, Some(2)),
-            line(LineKind::Added, "new3", None, Some(3)),
-        ])];
+        let hunks = vec![hunk(
+            "@@",
+            vec![
+                line(LineKind::Removed, "old1", Some(1), None),
+                line(LineKind::Removed, "old2", Some(2), None),
+                line(LineKind::Removed, "old3", Some(3), None),
+                line(LineKind::Added, "new1", None, Some(1)),
+                line(LineKind::Added, "new2", None, Some(2)),
+                line(LineKind::Added, "new3", None, Some(3)),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 4); // header + 3 paired
         assert!(matches!(rows[1], SplitRow::Paired { .. }));
@@ -284,15 +336,18 @@ mod tests {
 
     #[test]
     fn unequal_pairing_more_removed() {
-        let hunks = vec![hunk("@@", vec![
-            line(LineKind::Removed, "old1", Some(1), None),
-            line(LineKind::Removed, "old2", Some(2), None),
-            line(LineKind::Removed, "old3", Some(3), None),
-            line(LineKind::Removed, "old4", Some(4), None),
-            line(LineKind::Removed, "old5", Some(5), None),
-            line(LineKind::Added, "new1", None, Some(1)),
-            line(LineKind::Added, "new2", None, Some(2)),
-        ])];
+        let hunks = vec![hunk(
+            "@@",
+            vec![
+                line(LineKind::Removed, "old1", Some(1), None),
+                line(LineKind::Removed, "old2", Some(2), None),
+                line(LineKind::Removed, "old3", Some(3), None),
+                line(LineKind::Removed, "old4", Some(4), None),
+                line(LineKind::Removed, "old5", Some(5), None),
+                line(LineKind::Added, "new1", None, Some(1)),
+                line(LineKind::Added, "new2", None, Some(2)),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 6); // header + 2 paired + 3 left-only
         assert!(matches!(rows[1], SplitRow::Paired { .. }));
@@ -304,12 +359,15 @@ mod tests {
 
     #[test]
     fn unequal_pairing_more_added() {
-        let hunks = vec![hunk("@@", vec![
-            line(LineKind::Removed, "old1", Some(1), None),
-            line(LineKind::Added, "new1", None, Some(1)),
-            line(LineKind::Added, "new2", None, Some(2)),
-            line(LineKind::Added, "new3", None, Some(3)),
-        ])];
+        let hunks = vec![hunk(
+            "@@",
+            vec![
+                line(LineKind::Removed, "old1", Some(1), None),
+                line(LineKind::Added, "new1", None, Some(1)),
+                line(LineKind::Added, "new2", None, Some(2)),
+                line(LineKind::Added, "new3", None, Some(3)),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 4); // header + 1 paired + 2 right-only
         assert!(matches!(rows[1], SplitRow::Paired { .. }));
@@ -319,12 +377,15 @@ mod tests {
 
     #[test]
     fn mixed_context_and_changes() {
-        let hunks = vec![hunk("@@", vec![
-            line(LineKind::Context, "ctx1", Some(1), Some(1)),
-            line(LineKind::Removed, "old", Some(2), None),
-            line(LineKind::Added, "new", None, Some(2)),
-            line(LineKind::Context, "ctx2", Some(3), Some(3)),
-        ])];
+        let hunks = vec![hunk(
+            "@@",
+            vec![
+                line(LineKind::Context, "ctx1", Some(1), Some(1)),
+                line(LineKind::Removed, "old", Some(2), None),
+                line(LineKind::Added, "new", None, Some(2)),
+                line(LineKind::Context, "ctx2", Some(3), Some(3)),
+            ],
+        )];
         let rows = build_split_rows(&hunks);
         assert_eq!(rows.len(), 4); // header + ctx + paired + ctx
         assert!(matches!(rows[1], SplitRow::Context(_)));
@@ -381,14 +442,15 @@ mod tests {
     #[test]
     fn split_row_count_matches() {
         let hunks = vec![
-            hunk("@@", vec![
-                line(LineKind::Context, "a", Some(1), Some(1)),
-                line(LineKind::Removed, "b", Some(2), None),
-                line(LineKind::Added, "c", None, Some(2)),
-            ]),
-            hunk("@@", vec![
-                line(LineKind::Added, "d", None, Some(10)),
-            ]),
+            hunk(
+                "@@",
+                vec![
+                    line(LineKind::Context, "a", Some(1), Some(1)),
+                    line(LineKind::Removed, "b", Some(2), None),
+                    line(LineKind::Added, "c", None, Some(2)),
+                ],
+            ),
+            hunk("@@", vec![line(LineKind::Added, "d", None, Some(10))]),
         ];
         let count = split_row_count(&hunks);
         let rows = build_split_rows(&hunks);
@@ -398,12 +460,14 @@ mod tests {
     #[test]
     fn multi_hunk() {
         let hunks = vec![
-            hunk("@@ -1 +1 @@", vec![
-                line(LineKind::Context, "a", Some(1), Some(1)),
-            ]),
-            hunk("@@ -10 +10 @@", vec![
-                line(LineKind::Removed, "b", Some(10), None),
-            ]),
+            hunk(
+                "@@ -1 +1 @@",
+                vec![line(LineKind::Context, "a", Some(1), Some(1))],
+            ),
+            hunk(
+                "@@ -10 +10 @@",
+                vec![line(LineKind::Removed, "b", Some(10), None)],
+            ),
         ];
         let rows = build_split_rows(&hunks);
         // header + context + header + left-only = 4

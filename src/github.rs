@@ -2,12 +2,12 @@ use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
+use octocrab::Octocrab;
+use octocrab::models::IssueState;
 use octocrab::models::pulls::Comment as OctoComment;
 use octocrab::models::pulls::PullRequest;
 use octocrab::models::repos::{DiffEntry, DiffEntryStatus};
-use octocrab::models::IssueState;
 use octocrab::params;
-use octocrab::Octocrab;
 use tokio::runtime::Runtime;
 
 use crate::model;
@@ -34,7 +34,12 @@ impl GitHubProvider {
                 .context("failed to build GitHub client")
         })?;
 
-        Ok(Self { owner, repo, client, rt })
+        Ok(Self {
+            owner,
+            repo,
+            client,
+            rt,
+        })
     }
 }
 
@@ -67,14 +72,20 @@ fn resolve_token() -> Result<String> {
 impl RemoteProvider for GitHubProvider {
     fn fetch_authenticated_user(&self) -> Result<String> {
         self.rt.block_on(async {
-            let user = self.client.current().user().await.context("failed to fetch authenticated user")?;
+            let user = self
+                .client
+                .current()
+                .user()
+                .await
+                .context("failed to fetch authenticated user")?;
             Ok(user.login)
         })
     }
 
     fn fetch_pr_list(&self, limit: usize) -> Result<Vec<model::PrInfo>> {
         let pages: Vec<PullRequest> = self.rt.block_on(async {
-            let page = self.client
+            let page = self
+                .client
                 .pulls(&self.owner, &self.repo)
                 .list()
                 .state(params::State::All)
@@ -133,7 +144,8 @@ impl RemoteProvider for GitHubProvider {
         let pr_number: u64 = pr_id.parse().context("PR id must be a number")?;
 
         let files: Vec<DiffEntry> = self.rt.block_on(async {
-            let first_page = self.client
+            let first_page = self
+                .client
                 .pulls(&self.owner, &self.repo)
                 .list_files(pr_number)
                 .await
@@ -183,7 +195,8 @@ impl RemoteProvider for GitHubProvider {
         let pr_number: u64 = pr_id.parse().context("PR id must be a number")?;
 
         let comments: Vec<OctoComment> = self.rt.block_on(async {
-            let first_page = self.client
+            let first_page = self
+                .client
                 .pulls(&self.owner, &self.repo)
                 .list_comments(Some(pr_number))
                 .per_page(100)
@@ -255,9 +268,11 @@ fn parse_patch(patch: &str) -> Vec<model::Hunk> {
                     header: current_header,
                     lines: current_lines,
                 });
-                current_lines = Vec::new();
             }
-
+            // Reset unconditionally: anything accumulated before the first `@@`
+            // is file-header preamble (`diff --git`, `index`, `---`, `+++`),
+            // not hunk content.
+            current_lines = Vec::new();
             current_header = text.to_string();
 
             if let Some((old_start, new_start)) = parse_hunk_header(text) {
@@ -267,7 +282,21 @@ fn parse_patch(patch: &str) -> Vec<model::Hunk> {
                 old_num = 0;
                 new_num = 0;
             }
-        } else if let Some(stripped) = text.strip_prefix('+') {
+            continue;
+        }
+
+        // Ignore everything until the first hunk header.
+        if current_header.is_empty() {
+            continue;
+        }
+
+        // "\ No newline at end of file" is a marker, not content. Treating it
+        // as a context line would shift every following line number.
+        if text.starts_with('\\') {
+            continue;
+        }
+
+        if let Some(stripped) = text.strip_prefix('+') {
             current_lines.push(model::Line {
                 kind: model::LineKind::Added,
                 content: stripped.to_string(),
@@ -344,10 +373,7 @@ mod tests {
 
     #[test]
     fn hunk_header_with_function_context() {
-        assert_eq!(
-            parse_hunk_header("@@ -1,3 +1,4 @@ fn main()"),
-            Some((1, 1))
-        );
+        assert_eq!(parse_hunk_header("@@ -1,3 +1,4 @@ fn main()"), Some((1, 1)));
     }
 
     #[test]
@@ -430,5 +456,57 @@ mod tests {
         let patch = "@@ -1,3 +1,4 @@ fn main()\n context";
         let hunks = parse_patch(patch);
         assert_eq!(hunks[0].header, "@@ -1,3 +1,4 @@ fn main()");
+    }
+
+    #[test]
+    fn parse_patch_no_newline_marker_is_not_a_line() {
+        // GitHub emits a literal "\ No newline at end of file" marker. It is not
+        // content and must not consume a line number.
+        let patch = "@@ -1,2 +1,2 @@\n one\n-two\n\\ No newline at end of file\n+two\n\\ No newline at end of file";
+        let hunks = parse_patch(patch);
+        let lines = &hunks[0].lines;
+
+        assert_eq!(lines.len(), 3, "marker must not become a line");
+        assert_eq!(lines[0].content, "one");
+        assert_eq!(lines[1].content, "two");
+        assert!(matches!(lines[1].kind, LineKind::Removed));
+        assert_eq!(lines[2].content, "two");
+        assert!(matches!(lines[2].kind, LineKind::Added));
+
+        // Numbering must be unaffected by the markers.
+        assert_eq!(lines[0].old_num, Some(1));
+        assert_eq!(lines[0].new_num, Some(1));
+        assert_eq!(lines[1].old_num, Some(2));
+        assert_eq!(lines[2].new_num, Some(2));
+    }
+
+    #[test]
+    fn parse_patch_no_newline_marker_midway_keeps_numbering() {
+        let patch = "@@ -1,3 +1,3 @@\n-old\n\\ No newline at end of file\n+new\n ctx";
+        let hunks = parse_patch(patch);
+        let lines = &hunks[0].lines;
+
+        assert_eq!(lines.len(), 3);
+        // The context line after the marker must still be line 2/2.
+        assert_eq!(lines[2].old_num, Some(2));
+        assert_eq!(lines[2].new_num, Some(2));
+    }
+
+    #[test]
+    fn parse_patch_ignores_preamble_before_first_hunk() {
+        // Lines before the first @@ are file headers, not content.
+        let patch =
+            "diff --git a/x b/x\nindex abc..def 100644\n--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n ctx";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines.len(), 1, "preamble must not leak into hunk");
+        assert_eq!(hunks[0].lines[0].content, "ctx");
+    }
+
+    #[test]
+    fn parse_patch_crlf_content_is_preserved() {
+        let patch = "@@ -1,1 +1,1 @@\r\n context\r\n";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks[0].lines[0].content, "context");
     }
 }

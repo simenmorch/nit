@@ -4,18 +4,66 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, DiffViewMode, Focus, Tab, ReviewMode};
+use crate::app::{App, DiffViewMode, Focus, ReviewMode, Tab};
 use crate::config::ColorsConfig;
 use crate::model;
-use crate::split::{self, SplitRow, InlineSpan};
+use crate::split::{self, InlineSpan, SplitRow};
 use crate::tree::{FlatEntry, FlatEntryKind};
 
 const SIDEBAR_WIDTH: u16 = 40;
+const ELLIPSIS: &str = "...";
+
+/// Width of `s` in terminal cells.
+///
+/// This is the metric ratatui uses when laying out spans. Byte length
+/// (`str::len`) and character count (`chars().count()`) both disagree with it —
+/// the former for any non-ASCII text, the latter for wide characters (CJK,
+/// emoji) and zero-width combining marks. Column layout must use this.
+fn display_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+/// Truncate `s` to at most `max` display cells, appending an ellipsis when
+/// something had to be cut. Never splits a character.
+fn truncate_to_width(s: &str, max: usize) -> String {
+    if display_width(s) <= max {
+        return s.to_string();
+    }
+    // Below the ellipsis width there is nothing useful to signal with, so cut hard.
+    let budget = if max > ELLIPSIS.len() {
+        max - ELLIPSIS.len()
+    } else {
+        max
+    };
+
+    let mut out = String::new();
+    let mut width = 0usize;
+    for c in s.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+        if width + cw > budget {
+            break;
+        }
+        out.push(c);
+        width += cw;
+    }
+    if max > ELLIPSIS.len() {
+        out.push_str(ELLIPSIS);
+    }
+    out
+}
+
+/// Spaces needed to pad `s` out to `width` cells.
+fn pad_to_width(s: &str, width: usize) -> String {
+    " ".repeat(width.saturating_sub(display_width(s)))
+}
 
 /// Look up the syntax definition for a file path.
 /// For PHP files, uses "PHP Source" (pure PHP mode) instead of "PHP" (HTML+PHP)
@@ -55,7 +103,8 @@ pub fn draw(
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
-    ]).split(area);
+    ])
+    .split(area);
 
     draw_tab_bar(frame, app, outer[0], colors);
 
@@ -70,10 +119,7 @@ pub fn draw(
                 if app.show_sidebar {
                     let panels = Layout::default()
                         .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Length(SIDEBAR_WIDTH),
-                            Constraint::Min(1),
-                        ])
+                        .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
                         .split(outer[1]);
 
                     draw_sidebar(frame, app, diff, visible, panels[0], colors);
@@ -132,27 +178,49 @@ fn tree_prefix(entry: &FlatEntry) -> String {
         out.push_str(if has_next { "│  " } else { "   " });
     }
     if entry.depth > 0 {
-        out.push_str(if entry.is_last_sibling { "└─ " } else { "├─ " });
+        out.push_str(if entry.is_last_sibling {
+            "└─ "
+        } else {
+            "├─ "
+        });
     }
     out
 }
 
 fn is_folder_viewed(diff: &model::Diff, folder_path: &str) -> bool {
     let prefix = format!("{}/", folder_path);
-    let files: Vec<_> = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).collect();
+    let files: Vec<_> = diff
+        .files
+        .iter()
+        .filter(|f| f.path.starts_with(&prefix))
+        .collect();
     !files.is_empty() && files.iter().all(|f| f.viewed)
 }
 
 fn folder_stats(diff: &model::Diff, folder_path: &str) -> (usize, usize) {
     let prefix = format!("{}/", folder_path);
-    let added: usize = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).map(|f| f.added).sum();
-    let removed: usize = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).map(|f| f.removed).sum();
+    let added: usize = diff
+        .files
+        .iter()
+        .filter(|f| f.path.starts_with(&prefix))
+        .map(|f| f.added)
+        .sum();
+    let removed: usize = diff
+        .files
+        .iter()
+        .filter(|f| f.path.starts_with(&prefix))
+        .map(|f| f.removed)
+        .sum();
     (added, removed)
 }
 
 pub(crate) fn folder_file_counts(diff: &model::Diff, folder_path: &str) -> (usize, usize) {
     let prefix = format!("{}/", folder_path);
-    let files: Vec<_> = diff.files.iter().filter(|f| f.path.starts_with(&prefix)).collect();
+    let files: Vec<_> = diff
+        .files
+        .iter()
+        .filter(|f| f.path.starts_with(&prefix))
+        .collect();
     let viewed = files.iter().filter(|f| f.viewed).count();
     (files.len(), viewed)
 }
@@ -177,8 +245,16 @@ fn draw_sidebar(
             let indent = tree_prefix(entry);
 
             let (mut prefix_spans, stats): (Vec<Span>, String) = match &entry.kind {
-                FlatEntryKind::Folder { path, name, expanded } => {
-                    let viewed = if is_folder_viewed(diff, path) { "✓ " } else { "  " };
+                FlatEntryKind::Folder {
+                    path,
+                    name,
+                    expanded,
+                } => {
+                    let viewed = if is_folder_viewed(diff, path) {
+                        "✓ "
+                    } else {
+                        "  "
+                    };
                     let arrow = if *expanded { "▾ " } else { "▸ " };
                     let (added, removed) = folder_stats(diff, path);
                     let (count, viewed_count) = folder_file_counts(diff, path);
@@ -189,7 +265,9 @@ fn draw_sidebar(
                     };
                     let stats = format!("+{} -{}", added, removed);
                     let name_style = if is_selected {
-                        Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(colors.fg_selected)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(colors.fg_accent)
                     };
@@ -267,7 +345,14 @@ fn draw_sidebar(
     frame.render_widget(file_list, area);
 
     let inner_height = area.height.saturating_sub(2) as usize;
-    render_scrollbar(frame, area, app.sidebar_scroll, visible.len(), inner_height, colors);
+    render_scrollbar(
+        frame,
+        area,
+        app.sidebar_scroll,
+        visible.len(),
+        inner_height,
+        colors,
+    );
 }
 
 fn draw_file_diff(
@@ -336,11 +421,20 @@ fn draw_file_diff(
                 && all.contains(&line_index)
             {
                 let is_current = current == Some(line_index);
-                let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
+                let bg = if is_current {
+                    colors.bg_search_current
+                } else {
+                    colors.bg_search_match
+                };
                 hunk_header_spans = highlight_search_in_spans(hunk_header_spans, app, bg);
             }
 
-            lines.extend(wrap_line_spans(hunk_header_spans, inner_width, 10, wrap_indent_style));
+            lines.extend(wrap_line_spans(
+                hunk_header_spans,
+                inner_width,
+                10,
+                wrap_indent_style,
+            ));
         }
         line_index += 1;
 
@@ -393,11 +487,8 @@ fn draw_file_diff(
 
                 if let Ok(highlighted) = highlighter.highlight_line(content, ss) {
                     for (style, text) in highlighted {
-                        let fg = Color::Rgb(
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                        );
+                        let fg =
+                            Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
                         let mut s = Style::default().fg(fg);
                         if let Some(bg) = diff_bg {
                             s = s.bg(bg);
@@ -417,7 +508,11 @@ fn draw_file_diff(
                     && all.contains(&line_index)
                 {
                     let is_current = current == Some(line_index);
-                    let bg = if is_current { colors.bg_search_current } else { colors.bg_search_match };
+                    let bg = if is_current {
+                        colors.bg_search_current
+                    } else {
+                        colors.bg_search_match
+                    };
                     spans = highlight_search_in_spans(spans, app, bg);
                 }
 
@@ -465,18 +560,27 @@ fn draw_file_diff(
         Style::default().fg(colors.border_unfocused)
     };
 
-    let diff_view = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(Span::styled(title, Style::default().add_modifier(Modifier::BOLD))),
-        );
+    let diff_view = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(Span::styled(
+                title,
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+    );
 
     frame.render_widget(diff_view, area);
 
     let content_height = diff_line_count(file, DiffViewMode::Unified);
-    render_scrollbar(frame, area, app.scroll, content_height, inner_height, colors);
+    render_scrollbar(
+        frame,
+        area,
+        app.scroll,
+        content_height,
+        inner_height,
+        colors,
+    );
 }
 
 /// Highlight occurrences of the search query within a list of spans.
@@ -718,20 +822,14 @@ fn draw_commit_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCon
 
             // Reserve space: marker(2) + oid(7) + gap(2) + date(~15) + gap(2) + author(~15)
             let meta = format!("{}  {}", commit.author, commit.date);
-            let meta_width = meta.len();
+            let meta_width = display_width(&meta);
             let prefix_width = 2 + 7 + 2; // marker + oid + gap
             let msg_budget = inner_width
                 .saturating_sub(prefix_width)
                 .saturating_sub(meta_width + 2);
 
-            let msg: String = if commit.message.len() > msg_budget && msg_budget > 3 {
-                let truncated: String = commit.message.chars().take(msg_budget - 3).collect();
-                format!("{}...", truncated)
-            } else {
-                commit.message.clone()
-            };
-
-            let padding = msg_budget.saturating_sub(msg.len());
+            let msg = truncate_to_width(&commit.message, msg_budget);
+            let padding = pad_to_width(&msg, msg_budget).len();
 
             let msg_style = if is_selected {
                 Style::default().fg(colors.fg_selected)
@@ -814,21 +912,14 @@ fn draw_pr_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig)
             let state_badge = &pr.state;
 
             let meta = format!("{}  {}  {}", pr.author, state_badge, pr.updated_at);
-            let meta_width = meta.len();
+            let meta_width = display_width(&meta);
             let prefix_width = 2 + number_str.len() + 2;
             let title_budget = inner_width
                 .saturating_sub(prefix_width)
                 .saturating_sub(meta_width + 2);
 
-            let title_chars = pr.title.chars().count();
-            let title: String = if title_chars > title_budget && title_budget > 3 {
-                let truncated: String = pr.title.chars().take(title_budget - 3).collect();
-                format!("{}...", truncated)
-            } else {
-                pr.title.clone()
-            };
-
-            let padding = title_budget.saturating_sub(title.chars().count());
+            let title = truncate_to_width(&pr.title, title_budget);
+            let padding = pad_to_width(&title, title_budget).len();
 
             let title_style = if is_selected {
                 Style::default().fg(colors.fg_selected)
@@ -899,7 +990,9 @@ fn draw_pr_filter_modal(frame: &mut Frame, app: &App, area: Rect, colors: &Color
             let marker = if is_selected { "▸ " } else { "  " };
 
             let style = if is_selected {
-                Style::default().fg(colors.fg_selected).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(colors.fg_selected)
+                    .add_modifier(Modifier::BOLD)
             } else if is_enabled {
                 Style::default().fg(colors.fg)
             } else {
@@ -973,7 +1066,12 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
             Style::default().fg(colors.fg_muted),
         )));
     } else {
-        for (i, branch) in filtered.iter().enumerate().skip(scroll_offset).take(visible_rows) {
+        for (i, branch) in filtered
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible_rows)
+        {
             let is_selected = i == app.branch_modal.selected;
 
             let prefix = if branch.is_head { "* " } else { "  " };
@@ -986,32 +1084,26 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
 
             // Truncate branch name if it would overflow into the commit column
             let name_budget = commit_col.saturating_sub(2); // prefix
-            let name_display: String = if branch.name.len() > name_budget && name_budget > 3 {
-                let truncated: String = branch.name.chars().take(name_budget - 3).collect();
-                format!("{}...", truncated)
-            } else {
-                branch.name.clone()
-            };
-            let name_padding = commit_col.saturating_sub(2 + name_display.len());
+            let name_display = truncate_to_width(&branch.name, name_budget);
+            let name_padding = pad_to_width(&name_display, name_budget).len();
 
             // Truncate message to fit in the remaining space
             let commit_budget = inner_width.saturating_sub(commit_col);
-            let oid_and_space = branch.short_oid.len() + 1;
+            let oid_and_space = display_width(&branch.short_oid) + 1;
             let msg_budget = commit_budget.saturating_sub(oid_and_space);
-            let msg: String = if branch.message.chars().count() > msg_budget && msg_budget > 3 {
-                let truncated: String = branch.message.chars().take(msg_budget - 3).collect();
-                format!("{}...", truncated)
-            } else {
-                branch.message.clone()
-            };
-            let trail = commit_budget.saturating_sub(oid_and_space + msg.len());
+            let msg = truncate_to_width(&branch.message, msg_budget);
+            let trail = pad_to_width(&msg, msg_budget).len();
 
             let row_style = if is_selected {
                 Style::default().bg(highlight_bg)
             } else {
                 Style::default()
             };
-            let name_style = if is_selected { name_style.bg(highlight_bg) } else { name_style };
+            let name_style = if is_selected {
+                name_style.bg(highlight_bg)
+            } else {
+                name_style
+            };
             let oid_style = if is_selected {
                 Style::default().fg(colors.fg_accent).bg(highlight_bg)
             } else {
@@ -1049,48 +1141,66 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
 
 fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
     let sections: &[(&str, &[(&str, &str)])] = &[
-        ("Global", &[
-            ("1 / 2 / 3", "Switch tab (Diff / Commits / PRs)"),
-            ("q", "Quit"),
-            ("?", "Toggle this help"),
-            ("gg / G", "Jump to top / bottom"),
-        ]),
-        ("Diff — Sidebar", &[
-            ("j / k", "Navigate files"),
-            ("l / Enter", "Open file / toggle folder"),
-            ("Tab", "Focus diff panel"),
-        ]),
-        ("Diff — Panel", &[
-            ("j / k", "Scroll up / down"),
-            ("Ctrl+d / u", "Half-page down / up"),
-            ("Ctrl+f / b", "Full-page down / up"),
-            ("J / K", "Next / prev hunk"),
-            ("Ctrl+n / p", "Next / prev file"),
-            ("] / [", "Next / prev file (alias)"),
-            ("h", "Focus sidebar"),
-        ]),
-        ("Diff — Shared", &[
-            ("Space", "Stage file / folder"),
-            ("V", "Mark viewed & next"),
-            ("/ → Enter", "Search in file"),
-            ("n / N", "Next / prev match"),
-            ("s", "Toggle unified / split view"),
-            ("Ctrl+e", "Open in $EDITOR"),
-            ("Esc", "Clear search or go back"),
-        ]),
-        ("Local repo", &[
-            ("c", "Commit staged changes"),
-            ("b", "Switch branch"),
-            ("p / P", "Git pull / push"),
-        ]),
-        ("Commits / PRs", &[
-            ("j / k", "Navigate list"),
-            ("Ctrl+d / u", "Half-page down / up"),
-            ("Ctrl+f / b", "Full-page down / up"),
-            ("Enter", "View diff"),
-            ("f", "Filter PRs (PRs tab)"),
-            ("Esc", "Return to list"),
-        ]),
+        (
+            "Global",
+            &[
+                ("1 / 2 / 3", "Switch tab (Diff / Commits / PRs)"),
+                ("q", "Quit"),
+                ("?", "Toggle this help"),
+                ("gg / G", "Jump to top / bottom"),
+            ],
+        ),
+        (
+            "Diff — Sidebar",
+            &[
+                ("j / k", "Navigate files"),
+                ("l / Enter", "Open file / toggle folder"),
+                ("Tab", "Focus diff panel"),
+            ],
+        ),
+        (
+            "Diff — Panel",
+            &[
+                ("j / k", "Scroll up / down"),
+                ("Ctrl+d / u", "Half-page down / up"),
+                ("Ctrl+f / b", "Full-page down / up"),
+                ("J / K", "Next / prev hunk"),
+                ("Ctrl+n / p", "Next / prev file"),
+                ("] / [", "Next / prev file (alias)"),
+                ("h", "Focus sidebar"),
+            ],
+        ),
+        (
+            "Diff — Shared",
+            &[
+                ("Space", "Stage file / folder"),
+                ("V", "Mark viewed & next"),
+                ("/ → Enter", "Search in file"),
+                ("n / N", "Next / prev match"),
+                ("s", "Toggle unified / split view"),
+                ("Ctrl+e", "Open in $EDITOR"),
+                ("Esc", "Clear search or go back"),
+            ],
+        ),
+        (
+            "Local repo",
+            &[
+                ("c", "Commit staged changes"),
+                ("b", "Switch branch"),
+                ("p / P", "Git pull / push"),
+            ],
+        ),
+        (
+            "Commits / PRs",
+            &[
+                ("j / k", "Navigate list"),
+                ("Ctrl+d / u", "Half-page down / up"),
+                ("Ctrl+f / b", "Full-page down / up"),
+                ("Enter", "View diff"),
+                ("f", "Filter PRs (PRs tab)"),
+                ("Esc", "Return to list"),
+            ],
+        ),
     ];
 
     let mut content_lines: Vec<Line> = Vec::new();
@@ -1100,11 +1210,16 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
         }
         content_lines.push(Line::from(Span::styled(
             *heading,
-            Style::default().fg(colors.fg_accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors.fg_accent)
+                .add_modifier(Modifier::BOLD),
         )));
         for (key, desc) in *bindings {
             content_lines.push(Line::from(vec![
-                Span::styled(format!("  {:18}", key), Style::default().fg(colors.fg_selected)),
+                Span::styled(
+                    format!("  {:18}", key),
+                    Style::default().fg(colors.fg_selected),
+                ),
                 Span::styled(*desc, Style::default().fg(colors.fg)),
             ]));
         }
@@ -1133,9 +1248,12 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, colors: &ColorsConfig) {
 
 fn draw_confirm_modal(frame: &mut Frame, area: Rect, message: &str, colors: &ColorsConfig) {
     let hint = "y: yes  n: no";
-    let text_width = message.len().max(hint.len()) as u16 + 6;
-    let modal_width = text_width.clamp(24, area.width.saturating_sub(4));
-    let modal_height: u16 = 4;
+    let text_width = display_width(message).max(display_width(hint)) as u16 + 6;
+    // `clamp` would panic when the terminal is narrower than the minimum, so
+    // cap first and only then apply the floor.
+    let modal_width = text_width.min(area.width.saturating_sub(4)).max(1);
+    let modal_width = modal_width.max(24.min(area.width));
+    let modal_height: u16 = 4.min(area.height);
 
     let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
     let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
@@ -1162,9 +1280,12 @@ fn draw_confirm_modal(frame: &mut Frame, area: Rect, message: &str, colors: &Col
 }
 
 fn draw_loading_overlay(frame: &mut Frame, area: Rect, message: &str, colors: &ColorsConfig) {
-    let text_width = message.len() as u16 + 4; // padding
-    let modal_width = text_width.clamp(20, area.width.saturating_sub(4));
-    let modal_height: u16 = 3;
+    let text_width = display_width(message) as u16 + 4; // padding
+    // `clamp` would panic when the terminal is narrower than the minimum, so
+    // cap first and only then apply the floor.
+    let modal_width = text_width.min(area.width.saturating_sub(4)).max(1);
+    let modal_width = modal_width.max(20.min(area.width));
+    let modal_height: u16 = 3.min(area.height);
 
     let x = area.x + (area.width.saturating_sub(modal_width)) / 2;
     let y = area.y + (area.height.saturating_sub(modal_height)) / 2;
@@ -1218,7 +1339,10 @@ fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
             Span::styled("█", Style::default().fg(colors.fg_muted)),
         ])
     } else {
-        Line::from(Span::styled(&app.commit_summary, Style::default().fg(colors.fg)))
+        Line::from(Span::styled(
+            &app.commit_summary,
+            Style::default().fg(colors.fg),
+        ))
     };
     let summary = Paragraph::new(summary_content).block(
         Block::default()
@@ -1280,7 +1404,14 @@ fn draw_search_input(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
     frame.render_widget(Paragraph::new(input), area);
 }
 
-fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &str, area: Rect, colors: &ColorsConfig) {
+fn draw_status_bar(
+    frame: &mut Frame,
+    app: &App,
+    diff: &model::Diff,
+    branch: &str,
+    area: Rect,
+    colors: &ColorsConfig,
+) {
     let viewed_count = diff.files.iter().filter(|f| f.viewed).count();
     let total_added: usize = diff.files.iter().map(|f| f.added).sum();
     let total_removed: usize = diff.files.iter().map(|f| f.removed).sum();
@@ -1289,13 +1420,21 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
         if search.matches.is_empty() {
             format!("  /{} (no matches)", search.query)
         } else {
-            format!("  /{} ({}/{})", search.query, search.current + 1, search.matches.len())
+            format!(
+                "  /{} ({}/{})",
+                search.query,
+                search.current + 1,
+                search.matches.len()
+            )
         }
     } else {
         String::new()
     };
 
-    let in_subview = matches!(app.review_mode, ReviewMode::Commit { .. } | ReviewMode::PullRequest { .. });
+    let in_subview = matches!(
+        app.review_mode,
+        ReviewMode::Commit { .. } | ReviewMode::PullRequest { .. }
+    );
     let hints = if app.search.is_some() && in_subview {
         "Esc: clear search  ?: help  q: quit"
     } else if in_subview {
@@ -1307,7 +1446,12 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
     let status_msg_spans: Vec<Span> = if let Some(ref msg) = app.status_message {
         vec![
             Span::raw("  "),
-            Span::styled(msg.as_str(), Style::default().fg(colors.fg_accent).add_modifier(ratatui::style::Modifier::BOLD)),
+            Span::styled(
+                msg.as_str(),
+                Style::default()
+                    .fg(colors.fg_accent)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
         ]
     } else {
         vec![]
@@ -1322,9 +1466,15 @@ fn draw_status_bar(frame: &mut Frame, app: &App, diff: &model::Diff, branch: &st
             Style::default().fg(colors.fg),
         ),
         Span::raw("  "),
-        Span::styled(format!("+{}", total_added), Style::default().fg(colors.fg_added)),
+        Span::styled(
+            format!("+{}", total_added),
+            Style::default().fg(colors.fg_added),
+        ),
         Span::raw(" "),
-        Span::styled(format!("-{}", total_removed), Style::default().fg(colors.fg_removed)),
+        Span::styled(
+            format!("-{}", total_removed),
+            Style::default().fg(colors.fg_removed),
+        ),
         Span::styled(search_info, Style::default().fg(colors.fg_accent)),
     ];
     spans.extend(status_msg_spans);
@@ -1419,7 +1569,11 @@ fn draw_file_diff_split(
         let search_bg = search_info.as_ref().and_then(|(all, current)| {
             if all.contains(&row_idx) {
                 let is_current = *current == Some(row_idx);
-                Some(if is_current { colors.bg_search_current } else { colors.bg_search_match })
+                Some(if is_current {
+                    colors.bg_search_current
+                } else {
+                    colors.bg_search_match
+                })
             } else {
                 None
             }
@@ -1444,12 +1598,14 @@ fn draw_file_diff_split(
                 }
                 let wrapped_l = wrap_line_spans(left_spans, inner_width, 6, wrap_indent_style);
                 let wrapped_r = wrap_line_spans(right_spans, inner_width, 6, wrap_indent_style);
-                let max_rows = wrapped_l.len().max(wrapped_r.len());
                 left_lines.extend(wrapped_l);
                 right_lines.extend(wrapped_r);
-                for _ in left_lines.len()..right_lines.len() { left_lines.push(Line::from(vec![])); }
-                for _ in right_lines.len()..left_lines.len() { right_lines.push(Line::from(vec![])); }
-                let _ = max_rows;
+                for _ in left_lines.len()..right_lines.len() {
+                    left_lines.push(Line::from(vec![]));
+                }
+                for _ in right_lines.len()..left_lines.len() {
+                    right_lines.push(Line::from(vec![]));
+                }
             }
             SplitRow::Context(line) => {
                 let content = line.content.trim_end();
@@ -1467,17 +1623,40 @@ fn draw_file_diff_split(
                 let wrapped_r = wrap_line_spans(r_spans, inner_width, 6, wrap_indent_style);
                 left_lines.extend(wrapped_l);
                 right_lines.extend(wrapped_r);
-                for _ in left_lines.len()..right_lines.len() { left_lines.push(Line::from(vec![])); }
-                for _ in right_lines.len()..left_lines.len() { right_lines.push(Line::from(vec![])); }
+                for _ in left_lines.len()..right_lines.len() {
+                    left_lines.push(Line::from(vec![]));
+                }
+                for _ in right_lines.len()..left_lines.len() {
+                    right_lines.push(Line::from(vec![]));
+                }
             }
-            SplitRow::Paired { left, right, left_spans: l_inline, right_spans: r_inline } => {
+            SplitRow::Paired {
+                left,
+                right,
+                left_spans: l_inline,
+                right_spans: r_inline,
+            } => {
                 let l_content = left.content.trim_end();
                 let r_content = right.content.trim_end();
                 let l_gutter = format_split_gutter(left.old_num);
                 let r_gutter = format_split_gutter(right.new_num);
 
-                let mut l_spans = build_syntax_spans(l_content, &mut left_hl, ss, Some(colors.bg_removed), "-", colors);
-                let mut r_spans = build_syntax_spans(r_content, &mut right_hl, ss, Some(colors.bg_added), "+", colors);
+                let mut l_spans = build_syntax_spans(
+                    l_content,
+                    &mut left_hl,
+                    ss,
+                    Some(colors.bg_removed),
+                    "-",
+                    colors,
+                );
+                let mut r_spans = build_syntax_spans(
+                    r_content,
+                    &mut right_hl,
+                    ss,
+                    Some(colors.bg_added),
+                    "+",
+                    colors,
+                );
 
                 l_spans = apply_inline_highlight(l_spans, l_inline, colors.bg_inline_removed);
                 r_spans = apply_inline_highlight(r_spans, r_inline, colors.bg_inline_added);
@@ -1493,13 +1672,24 @@ fn draw_file_diff_split(
                 let wrapped_r = wrap_line_spans(r_spans, inner_width, 6, wrap_indent_style);
                 left_lines.extend(wrapped_l);
                 right_lines.extend(wrapped_r);
-                for _ in left_lines.len()..right_lines.len() { left_lines.push(Line::from(vec![])); }
-                for _ in right_lines.len()..left_lines.len() { right_lines.push(Line::from(vec![])); }
+                for _ in left_lines.len()..right_lines.len() {
+                    left_lines.push(Line::from(vec![]));
+                }
+                for _ in right_lines.len()..left_lines.len() {
+                    right_lines.push(Line::from(vec![]));
+                }
             }
             SplitRow::LeftOnly(line) => {
                 let content = line.content.trim_end();
                 let l_gutter = format_split_gutter(line.old_num);
-                let mut l_spans = build_syntax_spans(content, &mut left_hl, ss, Some(colors.bg_removed), "-", colors);
+                let mut l_spans = build_syntax_spans(
+                    content,
+                    &mut left_hl,
+                    ss,
+                    Some(colors.bg_removed),
+                    "-",
+                    colors,
+                );
                 l_spans.insert(0, Span::styled(l_gutter, gutter_style));
                 if let Some(bg) = search_bg {
                     l_spans = highlight_search_in_spans(l_spans, app, bg);
@@ -1508,13 +1698,21 @@ fn draw_file_diff_split(
                 let n = wrapped.len();
                 left_lines.extend(wrapped);
                 for _ in 0..n {
-                    right_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
+                    right_lines
+                        .push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
                 }
             }
             SplitRow::RightOnly(line) => {
                 let content = line.content.trim_end();
                 let r_gutter = format_split_gutter(line.new_num);
-                let mut r_spans = build_syntax_spans(content, &mut right_hl, ss, Some(colors.bg_added), "+", colors);
+                let mut r_spans = build_syntax_spans(
+                    content,
+                    &mut right_hl,
+                    ss,
+                    Some(colors.bg_added),
+                    "+",
+                    colors,
+                );
                 r_spans.insert(0, Span::styled(r_gutter, gutter_style));
                 if let Some(bg) = search_bg {
                     r_spans = highlight_search_in_spans(r_spans, app, bg);
@@ -1523,7 +1721,8 @@ fn draw_file_diff_split(
                 let n = wrapped.len();
                 right_lines.extend(wrapped);
                 for _ in 0..n {
-                    left_lines.push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
+                    left_lines
+                        .push(Line::from(vec![]).style(Style::default().bg(colors.bg_split_empty)));
                 }
             }
         }
@@ -1568,20 +1767,33 @@ fn draw_file_diff_split(
         Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(Span::styled(left_title, Style::default().add_modifier(Modifier::BOLD))),
+            .title(Span::styled(
+                left_title,
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
     );
 
     let right_widget = Paragraph::new(right_lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(Span::styled(right_title, Style::default().add_modifier(Modifier::BOLD))),
+            .title(Span::styled(
+                right_title,
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
     );
 
     frame.render_widget(left_widget, left_area);
     frame.render_widget(right_widget, right_area);
 
-    render_scrollbar(frame, right_area, app.scroll, rows.len(), inner_height, colors);
+    render_scrollbar(
+        frame,
+        right_area,
+        app.scroll,
+        rows.len(),
+        inner_height,
+        colors,
+    );
 }
 
 /// Format a single line number for the split-view gutter (4 chars + 1 space).
@@ -1631,7 +1843,11 @@ fn build_syntax_spans<'a>(
         "-" => Style::default().fg(colors.fg_removed),
         _ => Style::default().fg(colors.fg),
     };
-    let prefix_style = if let Some(bg) = diff_bg { prefix_style.bg(bg) } else { prefix_style };
+    let prefix_style = if let Some(bg) = diff_bg {
+        prefix_style.bg(bg)
+    } else {
+        prefix_style
+    };
 
     let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
 
@@ -1740,8 +1956,8 @@ mod tests {
     use crate::config::ColorsConfig;
     use crate::model::LineKind;
     use crate::test_helpers::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use syntect::highlighting::ThemeSet;
     use syntect::parsing::SyntaxSet;
 
@@ -1834,7 +2050,12 @@ mod tests {
             "a.rs",
             vec![make_hunk(
                 "@@ -1 +1 @@",
-                vec![make_line(LineKind::Context, "search target", Some(1), Some(1))],
+                vec![make_line(
+                    LineKind::Context,
+                    "search target",
+                    Some(1),
+                    Some(1),
+                )],
             )],
         )]);
         let visible = flat_entries_for(&diff);
@@ -1861,7 +2082,10 @@ mod tests {
         let lines: Vec<_> = (0..50)
             .map(|i| make_line(LineKind::Context, &format!("line {}", i), Some(i), Some(i)))
             .collect();
-        let diff = make_diff(vec![make_file("big.rs", vec![make_hunk("@@ -1 +1 @@", lines)])]);
+        let diff = make_diff(vec![make_file(
+            "big.rs",
+            vec![make_hunk("@@ -1 +1 @@", lines)],
+        )]);
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
         app.scroll = 30;
@@ -1878,6 +2102,54 @@ mod tests {
     }
 
     #[test]
+    fn render_confirm_modal_in_narrow_terminal() {
+        // Regression: `clamp(24, width - 4)` panicked below 28 columns.
+        for (w, h) in [(20, 5), (10, 4), (4, 3), (1, 1)] {
+            let mut terminal = test_terminal(w, h);
+            let diff = make_simple_diff(1);
+            let visible = flat_entries_for(&diff);
+            let mut app = App::new();
+            app.confirm = Some(crate::app::ConfirmModal {
+                open: true,
+                message: "Push to origin?".to_string(),
+                action: crate::app::PendingAction::GitPush,
+            });
+            render(&mut terminal, &app, &diff, &visible);
+        }
+    }
+
+    #[test]
+    fn render_loading_overlay_in_narrow_terminal() {
+        // Regression: `clamp(20, width - 4)` panicked below 24 columns.
+        for (w, h) in [(20, 5), (10, 4), (4, 3), (1, 1)] {
+            let mut terminal = test_terminal(w, h);
+            let diff = make_simple_diff(1);
+            let visible = flat_entries_for(&diff);
+            let mut app = App::new();
+            app.loading_message = Some("Loading PRs...".to_string());
+            render(&mut terminal, &app, &diff, &visible);
+        }
+    }
+
+    #[test]
+    fn render_confirm_modal_wide_terminal() {
+        let mut terminal = test_terminal(120, 40);
+        let diff = make_simple_diff(1);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.confirm = Some(crate::app::ConfirmModal {
+            open: true,
+            message: "Pull from origin?".to_string(),
+            action: crate::app::PendingAction::GitPull,
+        });
+        render(&mut terminal, &app, &diff, &visible);
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("Pull from origin?"));
+        assert!(text.contains("y: yes"));
+    }
+
+    #[test]
     fn render_binary_file() {
         let mut terminal = test_terminal(120, 40);
         let mut file = make_file("image.png", vec![]);
@@ -1891,10 +2163,16 @@ mod tests {
     #[test]
     fn render_long_filename() {
         let mut terminal = test_terminal(120, 40);
-        let long_path = format!("src/very/deeply/nested/directory/structure/{}", "a".repeat(60));
+        let long_path = format!(
+            "src/very/deeply/nested/directory/structure/{}",
+            "a".repeat(60)
+        );
         let diff = make_diff(vec![make_file(
             &long_path,
-            vec![make_hunk("@@ -1 +1 @@", vec![make_line(LineKind::Context, "x", Some(1), Some(1))])],
+            vec![make_hunk(
+                "@@ -1 +1 @@",
+                vec![make_line(LineKind::Context, "x", Some(1), Some(1))],
+            )],
         )]);
         let visible = flat_entries_for(&diff);
         let app = App::new();
@@ -1906,17 +2184,136 @@ mod tests {
         let file = make_file(
             "a.rs",
             vec![
-                make_hunk("@@", vec![
-                    make_line(LineKind::Context, "a", Some(1), Some(1)),
-                    make_line(LineKind::Context, "b", Some(2), Some(2)),
-                ]),
-                make_hunk("@@", vec![
-                    make_line(LineKind::Added, "c", None, Some(3)),
-                ]),
+                make_hunk(
+                    "@@",
+                    vec![
+                        make_line(LineKind::Context, "a", Some(1), Some(1)),
+                        make_line(LineKind::Context, "b", Some(2), Some(2)),
+                    ],
+                ),
+                make_hunk("@@", vec![make_line(LineKind::Added, "c", None, Some(3))]),
             ],
         );
         // 2 hunks: (1 header + 2 lines) + (1 header + 1 line) = 5
         assert_eq!(diff_line_count(&file, DiffViewMode::Unified), 5);
+    }
+
+    // ── Display width helpers ──
+
+    #[test]
+    fn display_width_counts_cells_not_bytes() {
+        assert_eq!(display_width("hello"), 5);
+        // Non-ASCII: 8 bytes, 6 chars, 6 cells.
+        assert_eq!("Løsning".len(), 8);
+        assert_eq!(display_width("Løsning"), 7);
+        // Wide characters take two cells each.
+        assert_eq!(display_width("日本語"), 6);
+        assert_eq!("日本語".chars().count(), 3);
+    }
+
+    #[test]
+    fn truncate_to_width_leaves_short_strings_alone() {
+        assert_eq!(truncate_to_width("abc", 10), "abc");
+        assert_eq!(truncate_to_width("abc", 3), "abc");
+    }
+
+    #[test]
+    fn truncate_to_width_appends_ellipsis() {
+        assert_eq!(truncate_to_width("abcdefghij", 8), "abcde...");
+        assert_eq!(display_width(&truncate_to_width("abcdefghij", 8)), 8);
+    }
+
+    #[test]
+    fn truncate_to_width_respects_cells_for_wide_chars() {
+        // Six cells of content truncated to five must not emit three wide chars.
+        let out = truncate_to_width("日本語テスト", 8);
+        assert!(display_width(&out) <= 8, "got {:?}", out);
+        assert!(out.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_to_width_never_splits_a_character() {
+        for max in 0..12 {
+            let out = truncate_to_width("Løsningen", max);
+            assert!(out.is_char_boundary(out.len()));
+            assert!(display_width(&out) <= max, "max={} out={:?}", max, out);
+        }
+    }
+
+    #[test]
+    fn truncate_to_width_zero_yields_empty() {
+        assert_eq!(truncate_to_width("abc", 0), "");
+    }
+
+    #[test]
+    fn pad_to_width_fills_by_cells() {
+        // "Løsning" is 8 bytes but 7 cells; padding to 10 needs 3 spaces, not 2.
+        assert_eq!(pad_to_width("Løsning", 10).len(), 3);
+        assert_eq!(pad_to_width("日本語", 10).len(), 4);
+        assert_eq!(pad_to_width("toolong", 3).len(), 0);
+    }
+
+    #[test]
+    fn truncate_plus_pad_always_fills_exactly_one_column() {
+        // The invariant the commit/PR/branch lists rely on for alignment.
+        for s in ["short", "Løsningen er her", "日本語テストです", "x"] {
+            for budget in [4usize, 8, 12, 20] {
+                let t = truncate_to_width(s, budget);
+                let total = display_width(&t) + pad_to_width(&t, budget).len();
+                assert_eq!(total, budget, "s={:?} budget={}", s, budget);
+            }
+        }
+    }
+
+    #[test]
+    fn commit_list_columns_align_with_non_ascii() {
+        // Regression: byte length was used as a cell budget, so any non-ASCII
+        // author or message shifted the right-hand meta column.
+        let mut terminal = test_terminal(100, 12);
+        let diff = make_simple_diff(1);
+        let visible = flat_entries_for(&diff);
+        let mut app = App::new();
+        app.active_tab = Tab::Commits;
+        app.commits = vec![
+            model::CommitInfo {
+                oid: "1111111111".to_string(),
+                short_oid: "1111111".to_string(),
+                message: "ascii only message".to_string(),
+                author: "Bob".to_string(),
+                date: "2 hours ago".to_string(),
+            },
+            model::CommitInfo {
+                oid: "2222222222".to_string(),
+                short_oid: "2222222".to_string(),
+                message: "løsning på blåbærsyltetøy".to_string(),
+                author: "Åse Ødegård".to_string(),
+                date: "3 hours ago".to_string(),
+            },
+        ];
+        render(&mut terminal, &app, &diff, &visible);
+
+        let buf = terminal.backend().buffer();
+        let row_text =
+            |y: u16| -> String { (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>() };
+
+        // Find the two commit rows and check the dates end at the same column.
+        let rows: Vec<String> = (0..12).map(row_text).collect();
+        let ascii_row = rows.iter().find(|r| r.contains("ascii only")).unwrap();
+        let nordic_row = rows.iter().find(|r| r.contains("blåbær")).unwrap();
+
+        // The meta column is right-aligned, so "hours ago" must end at the same
+        // cell in both rows. Measure in chars, since the rows are cell symbols.
+        let meta_end = |r: &str| -> usize {
+            let byte_idx = r.find("hours ago").expect("meta column missing");
+            r[..byte_idx].chars().count() + "hours ago".chars().count()
+        };
+        assert_eq!(
+            meta_end(ascii_row),
+            meta_end(nordic_row),
+            "columns misaligned:\n{:?}\n{:?}",
+            ascii_row.trim_end(),
+            nordic_row.trim_end()
+        );
     }
 
     // ── Sidebar helpers ──

@@ -2,13 +2,16 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::model::DiffFile;
 
+/// A hierarchical view of the diff's file paths.
+///
+/// Folders and files are kept in separate maps so that a path segment can be
+/// both — e.g. a commit that deletes the file `foo` and adds `foo/bar.rs`.
+/// With a single map keyed by name, one of the two would silently overwrite or
+/// be swallowed by the other, hiding files that the status bar still counts.
+#[derive(Default)]
 pub struct FileTree {
-    entries: BTreeMap<String, TreeEntry>,
-}
-
-enum TreeEntry {
-    Folder(FileTree),
-    File(usize),
+    folders: BTreeMap<String, FileTree>,
+    files: BTreeMap<String, usize>,
 }
 
 pub struct FlatEntry {
@@ -36,9 +39,7 @@ pub enum FlatEntryKind {
 
 impl FileTree {
     pub fn from_files(files: &[DiffFile]) -> Self {
-        let mut root = FileTree {
-            entries: BTreeMap::new(),
-        };
+        let mut root = FileTree::default();
         for (i, file) in files.iter().enumerate() {
             let parts: Vec<&str> = file.path.split('/').collect();
             root.insert_parts(&parts, i);
@@ -48,17 +49,12 @@ impl FileTree {
 
     fn insert_parts(&mut self, parts: &[&str], file_index: usize) {
         if parts.len() == 1 {
-            self.entries
-                .insert(parts[0].to_string(), TreeEntry::File(file_index));
+            self.files.insert(parts[0].to_string(), file_index);
         } else {
-            let folder_name = parts[0].to_string();
-            let entry = self
-                .entries
-                .entry(folder_name)
-                .or_insert_with(|| TreeEntry::Folder(FileTree { entries: BTreeMap::new() }));
-            if let TreeEntry::Folder(subtree) = entry {
-                subtree.insert_parts(&parts[1..], file_index);
-            }
+            self.folders
+                .entry(parts[0].to_string())
+                .or_default()
+                .insert_parts(&parts[1..], file_index);
         }
     }
 
@@ -75,84 +71,64 @@ impl FileTree {
     ) -> Vec<FlatEntry> {
         let mut result = Vec::new();
 
-        // Folders first, then files (BTreeMap keeps alphabetical order within each group)
-        let folders: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|(_, v)| matches!(v, TreeEntry::Folder(_)))
-            .collect();
-        let files: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|(_, v)| matches!(v, TreeEntry::File(_)))
-            .collect();
-
+        // Folders first, then files (BTreeMap keeps alphabetical order within each group).
         // Total siblings emitted at this depth determines is_last_sibling for each.
-        // Folders come first, then files, so a folder at index i is last only if
-        // i + 1 == folders.len() AND files is empty.
-        let folder_count = folders.len();
-        let total = folder_count + files.len();
+        let folder_count = self.folders.len();
+        let total = folder_count + self.files.len();
 
-        for (i, (name, entry)) in folders.into_iter().enumerate() {
-            if let TreeEntry::Folder(subtree) = entry {
-                // Collapse single-folder chains: walk down while the current
-                // folder contains exactly one entry and that entry is itself a folder.
-                let mut merged_segments: Vec<String> = vec![name.clone()];
-                let mut current = subtree;
-                loop {
-                    if current.entries.len() != 1 {
-                        break;
-                    }
-                    let (only_name, only_entry) = current.entries.iter().next().unwrap();
-                    match only_entry {
-                        TreeEntry::Folder(sub) => {
-                            merged_segments.push(only_name.clone());
-                            current = sub;
-                        }
-                        TreeEntry::File(_) => break,
-                    }
-                }
+        for (i, (name, subtree)) in self.folders.iter().enumerate() {
+            // Collapse single-folder chains: walk down while the current folder
+            // contains exactly one entry and that entry is itself a folder.
+            let mut merged_segments: Vec<String> = vec![name.clone()];
+            let mut current = subtree;
+            while current.files.is_empty() && current.folders.len() == 1 {
+                let (only_name, only_subtree) = current.folders.iter().next().unwrap();
+                merged_segments.push(only_name.clone());
+                current = only_subtree;
+            }
 
-                let display_name = merged_segments.join("/");
-                let full_path = if prefix.is_empty() {
-                    display_name.clone()
-                } else {
-                    format!("{}/{}", prefix, display_name)
-                };
-                let expanded = !collapsed.contains(&full_path);
-                let is_last_sibling = i + 1 == total;
-                result.push(FlatEntry {
-                    depth,
-                    kind: FlatEntryKind::Folder {
-                        path: full_path.clone(),
-                        name: display_name,
-                        expanded,
-                    },
-                    ancestor_has_next: ancestor_has_next.to_vec(),
-                    is_last_sibling,
-                });
-                if expanded {
-                    let mut child_ancestors = ancestor_has_next.to_vec();
-                    child_ancestors.push(!is_last_sibling);
-                    result.extend(current.flatten_inner(collapsed, &full_path, depth + 1, &child_ancestors));
-                }
+            let display_name = merged_segments.join("/");
+            let full_path = if prefix.is_empty() {
+                display_name.clone()
+            } else {
+                format!("{}/{}", prefix, display_name)
+            };
+            let expanded = !collapsed.contains(&full_path);
+            let is_last_sibling = i + 1 == total;
+            result.push(FlatEntry {
+                depth,
+                kind: FlatEntryKind::Folder {
+                    path: full_path.clone(),
+                    name: display_name,
+                    expanded,
+                },
+                ancestor_has_next: ancestor_has_next.to_vec(),
+                is_last_sibling,
+            });
+            if expanded {
+                let mut child_ancestors = ancestor_has_next.to_vec();
+                child_ancestors.push(!is_last_sibling);
+                result.extend(current.flatten_inner(
+                    collapsed,
+                    &full_path,
+                    depth + 1,
+                    &child_ancestors,
+                ));
             }
         }
 
-        for (j, (name, entry)) in files.into_iter().enumerate() {
-            if let TreeEntry::File(file_index) = entry {
-                let i = folder_count + j;
-                let is_last_sibling = i + 1 == total;
-                result.push(FlatEntry {
-                    depth,
-                    kind: FlatEntryKind::File {
-                        file_index: *file_index,
-                        name: name.clone(),
-                    },
-                    ancestor_has_next: ancestor_has_next.to_vec(),
-                    is_last_sibling,
-                });
-            }
+        for (j, (name, file_index)) in self.files.iter().enumerate() {
+            let i = folder_count + j;
+            let is_last_sibling = i + 1 == total;
+            result.push(FlatEntry {
+                depth,
+                kind: FlatEntryKind::File {
+                    file_index: *file_index,
+                    name: name.clone(),
+                },
+                ancestor_has_next: ancestor_has_next.to_vec(),
+                is_last_sibling,
+            });
         }
 
         result
@@ -173,6 +149,63 @@ mod tests {
 
     fn is_folder(entry: &FlatEntry) -> bool {
         matches!(entry.kind, FlatEntryKind::Folder { .. })
+    }
+
+    /// Every file in the diff must be reachable in the flattened tree,
+    /// otherwise the sidebar silently hides changes the status bar still counts.
+    fn assert_all_files_reachable(diff: &crate::model::Diff) {
+        let flat = flat_entries_for(diff);
+        let mut found: Vec<usize> = flat
+            .iter()
+            .filter_map(|e| match &e.kind {
+                FlatEntryKind::File { file_index, .. } => Some(*file_index),
+                _ => None,
+            })
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        let expected: Vec<usize> = (0..diff.files.len()).collect();
+        assert_eq!(
+            found,
+            expected,
+            "some files are missing from the tree: {:?}",
+            diff.files
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !found.contains(i))
+                .map(|(_, f)| &f.path)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn file_then_folder_with_same_name_keeps_both() {
+        // A commit that deletes file `foo` and adds `foo/bar.rs`.
+        let diff = make_diff(vec![
+            make_file("foo", vec![]),
+            make_file("foo/bar.rs", vec![]),
+        ]);
+        assert_all_files_reachable(&diff);
+    }
+
+    #[test]
+    fn folder_then_file_with_same_name_keeps_both() {
+        // Same collision, opposite insertion order.
+        let diff = make_diff(vec![
+            make_file("foo/bar.rs", vec![]),
+            make_file("foo", vec![]),
+        ]);
+        assert_all_files_reachable(&diff);
+    }
+
+    #[test]
+    fn deep_collision_keeps_all_files() {
+        let diff = make_diff(vec![
+            make_file("a/b", vec![]),
+            make_file("a/b/c.rs", vec![]),
+            make_file("a/b/d.rs", vec![]),
+        ]);
+        assert_all_files_reachable(&diff);
     }
 
     #[test]
@@ -279,10 +312,7 @@ mod tests {
 
     #[test]
     fn file_indices_are_correct() {
-        let diff = make_diff(vec![
-            make_file("b.rs", vec![]),
-            make_file("a.rs", vec![]),
-        ]);
+        let diff = make_diff(vec![make_file("b.rs", vec![]), make_file("a.rs", vec![])]);
         let flat = flat_entries_for(&diff);
         // BTreeMap sorts alphabetically: a.rs (file_index=1), b.rs (file_index=0)
         if let FlatEntryKind::File { file_index, .. } = &flat[0].kind {
@@ -347,13 +377,10 @@ mod tests {
 
     #[test]
     fn last_sibling_flag_correct_for_root() {
-        let diff = make_diff(vec![
-            make_file("a.rs", vec![]),
-            make_file("b.rs", vec![]),
-        ]);
+        let diff = make_diff(vec![make_file("a.rs", vec![]), make_file("b.rs", vec![])]);
         let flat = flat_entries_for(&diff);
         assert!(!flat[0].is_last_sibling); // a.rs
-        assert!(flat[1].is_last_sibling);  // b.rs
+        assert!(flat[1].is_last_sibling); // b.rs
     }
 
     #[test]
@@ -367,7 +394,7 @@ mod tests {
         ]);
         let flat = flat_entries_for(&diff);
         // [src, foo.rs, tests, bar.rs]
-        assert_eq!(flat[1].ancestor_has_next, vec![true]);  // src has tests after it
+        assert_eq!(flat[1].ancestor_has_next, vec![true]); // src has tests after it
         assert_eq!(flat[3].ancestor_has_next, vec![false]); // tests is last
     }
 }
