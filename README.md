@@ -1,11 +1,10 @@
 # nit
 
-A terminal-based code review tool built in Rust. Name comes from "nitpick" — the small, careful comments that make code better.
+A keyboard-driven diff viewer for the terminal, inspired by GitHub's "Files changed" tab.
 
-A GitHub-like "Files changed" experience in the terminal — structured, navigable, keyboard-driven.
+This is first and foremost a diff/review tool. Although there are some git functionality, they are  mostly there for convenience. I built this tool for myself, so it is tailor made for my specific needs.
 
-This is first and foremost a diff/review tool. Although there are some git functionality, they are  mostly there for convenience. There are similar tools out there that are more feature rich and
-probably better for most people, but they did not really work for me, so I built my own tool to work exactly as I wanted it to.
+**Disclaimer:** This is my first Rust project and it was written with heavy AI assistance. I have read and approved every line, but I would not call myself a Rust expert. Treat it accordingly.
 
 ## Features
 
@@ -16,6 +15,20 @@ probably better for most people, but they did not really work for me, so I built
 - **Commit log browser** — browse and review the diff of any commit
 - **Git operations** — stage files, commit, switch branches, pull, push
 - **Configurable** — syntax themes, full color customization
+
+## Installation
+
+Install directly to `~/.cargo/bin`:
+
+```bash
+cargo install --path .
+```
+
+Or build the release binary:
+
+```bash
+cargo build --release
+```
 
 ## Usage
 
@@ -175,12 +188,6 @@ bg_split_empty = "#1E222A"
 bg_search_match = "#78641E"
 bg_search_current = "#B48C14"
 bg_selected = "#3B4252"
-```
-
-## Building
-
-```bash
-cargo build --release
 ```
 
 ## License
