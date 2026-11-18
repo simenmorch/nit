@@ -43,7 +43,6 @@ impl GitHubProvider {
     }
 }
 
-/// Try GITHUB_TOKEN env var, then fall back to `gh auth token`.
 fn resolve_token() -> Result<String> {
     if let Ok(token) = std::env::var("GITHUB_TOKEN")
         && !token.is_empty()
@@ -253,7 +252,6 @@ impl RemoteProvider for GitHubProvider {
     }
 }
 
-/// Parse a GitHub patch string into our Hunk/Line model.
 fn parse_patch(patch: &str) -> Vec<model::Hunk> {
     let mut hunks: Vec<model::Hunk> = Vec::new();
     let mut current_header = String::new();
@@ -285,7 +283,6 @@ fn parse_patch(patch: &str) -> Vec<model::Hunk> {
             continue;
         }
 
-        // Ignore everything until the first hunk header.
         if current_header.is_empty() {
             continue;
         }
@@ -364,8 +361,6 @@ mod tests {
     use super::*;
     use crate::model::LineKind;
 
-    // ── parse_hunk_header ──
-
     #[test]
     fn hunk_header_standard() {
         assert_eq!(parse_hunk_header("@@ -10,5 +20,8 @@"), Some((10, 20)));
@@ -390,8 +385,6 @@ mod tests {
     fn hunk_header_empty() {
         assert_eq!(parse_hunk_header(""), None);
     }
-
-    // ── parse_patch ──
 
     #[test]
     fn parse_patch_single_hunk() {
@@ -424,15 +417,12 @@ mod tests {
         let hunks = parse_patch(patch);
         let lines = &hunks[0].lines;
 
-        // Context line: both old and new
         assert_eq!(lines[0].old_num, Some(10));
         assert_eq!(lines[0].new_num, Some(20));
 
-        // Added line: only new
         assert_eq!(lines[1].old_num, None);
         assert_eq!(lines[1].new_num, Some(21));
 
-        // Removed line: only old
         assert_eq!(lines[2].old_num, Some(11));
         assert_eq!(lines[2].new_num, None);
     }
@@ -460,8 +450,6 @@ mod tests {
 
     #[test]
     fn parse_patch_no_newline_marker_is_not_a_line() {
-        // GitHub emits a literal "\ No newline at end of file" marker. It is not
-        // content and must not consume a line number.
         let patch = "@@ -1,2 +1,2 @@\n one\n-two\n\\ No newline at end of file\n+two\n\\ No newline at end of file";
         let hunks = parse_patch(patch);
         let lines = &hunks[0].lines;
@@ -473,7 +461,6 @@ mod tests {
         assert_eq!(lines[2].content, "two");
         assert!(matches!(lines[2].kind, LineKind::Added));
 
-        // Numbering must be unaffected by the markers.
         assert_eq!(lines[0].old_num, Some(1));
         assert_eq!(lines[0].new_num, Some(1));
         assert_eq!(lines[1].old_num, Some(2));
@@ -487,14 +474,12 @@ mod tests {
         let lines = &hunks[0].lines;
 
         assert_eq!(lines.len(), 3);
-        // The context line after the marker must still be line 2/2.
         assert_eq!(lines[2].old_num, Some(2));
         assert_eq!(lines[2].new_num, Some(2));
     }
 
     #[test]
     fn parse_patch_ignores_preamble_before_first_hunk() {
-        // Lines before the first @@ are file headers, not content.
         let patch =
             "diff --git a/x b/x\nindex abc..def 100644\n--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n ctx";
         let hunks = parse_patch(patch);

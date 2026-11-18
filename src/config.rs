@@ -199,19 +199,16 @@ fn load_theme_file(path: &Path) -> Result<Theme> {
 const THEME_EXTENSIONS: &[&str] = &["tmTheme", "sublime-color-scheme"];
 
 pub fn resolve_theme(config: &ThemeConfig) -> Result<Theme> {
-    // 1. Explicit file path takes priority
     if let Some(ref path) = config.syntax_file {
         let expanded = expand_tilde(path);
         return load_theme_file(&expanded);
     }
 
-    // 2. Check bundled syntect themes
     let ts = ThemeSet::load_defaults();
     if let Some(theme) = ts.themes.get(&config.syntax) {
         return Ok(theme.clone());
     }
 
-    // 3. Search themes directory for a matching theme file
     if let Some(themes_dir) = config_dir().map(|d| d.join("themes"))
         && themes_dir.is_dir()
     {
@@ -243,8 +240,6 @@ pub fn resolve_theme(config: &ThemeConfig) -> Result<Theme> {
 mod tests {
     use super::*;
 
-    // ── parse_hex_color ──
-
     #[test]
     fn parse_valid_hex_with_hash() {
         assert_eq!(parse_hex_color("#ff0000").unwrap(), Color::Rgb(255, 0, 0));
@@ -272,8 +267,6 @@ mod tests {
     fn parse_hex_invalid_chars() {
         assert!(parse_hex_color("#gggggg").is_err());
     }
-
-    // ── Config deserialization ──
 
     #[test]
     fn empty_toml_gives_defaults() {
@@ -328,12 +321,9 @@ bg_inline_removed = "#502828"
         assert!(resolve_theme(&theme_config).is_err());
     }
 
-    // ── expand_tilde ──
-
     #[test]
     fn expand_tilde_with_prefix() {
         let path = expand_tilde("~/some/path");
-        // Should not start with ~ anymore
         assert!(!path.to_string_lossy().starts_with('~'));
     }
 

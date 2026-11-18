@@ -14,7 +14,6 @@ use provider::RemoteProvider;
 /// every reload, so the list cannot silently shrink after a pull.
 const COMMIT_LOG_LIMIT: usize = 500;
 
-/// How many pull requests to fetch for the PRs tab.
 const PR_LIST_LIMIT: usize = 100;
 
 #[derive(Parser)]
@@ -122,10 +121,8 @@ fn handle_key(
     repo: &git2::Repository,
     diff_cache: &cache::DiffCache,
 ) -> KeyAction {
-    // Clear status message on any keypress
     app.status_message = None;
 
-    // Search input mode — capture keystrokes for the query
     if app.searching {
         match key.code {
             KeyCode::Enter => app.submit_search(diff),
@@ -139,7 +136,6 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
-    // Commit message modal
     if app.committing {
         // Alt+Enter submits from either field (plain Enter in the description
         // field inserts a newline, so we need a modifier to submit from there).
@@ -174,7 +170,6 @@ fn handle_key(
             },
             app::CommitField::Description => match key.code {
                 KeyCode::Enter => {
-                    // Insert a new line after the cursor row
                     let row = app.commit_cursor;
                     app.commit_description.insert(row + 1, String::new());
                     app.commit_cursor += 1;
@@ -214,7 +209,6 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
-    // Branch modal intercepts all keys
     if app.branch_modal.open {
         let has_filter = app.branch_modal.branches.len() > 10;
 
@@ -264,7 +258,6 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
-    // Confirm modal intercepts all keys when open
     if let Some(ref confirm) = app.confirm {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -283,7 +276,6 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
-    // Help modal intercepts all keys when open
     if app.show_help {
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
@@ -294,12 +286,10 @@ fn handle_key(
         return KeyAction::Continue;
     }
 
-    // Filter modal intercepts all keys — must be checked before global keys
     if app.pr_filter.modal_open {
         return handle_prs_tab_key(key, app, viewport_height);
     }
 
-    // Handle gg (two-key combo)
     if app.g_pressed {
         app.g_pressed = false;
         if key.code == KeyCode::Char('g') {
@@ -312,7 +302,6 @@ fn handle_key(
         }
     }
 
-    // Global keys (work regardless of tab)
     match key.code {
         KeyCode::Char('q') => return KeyAction::Quit,
         KeyCode::Char('?') => {
@@ -367,7 +356,6 @@ fn handle_key(
         _ => {}
     }
 
-    // Tab-specific dispatch
     match app.active_tab {
         app::Tab::Diff => handle_diff_tab_key(
             key,
@@ -395,7 +383,6 @@ fn handle_diff_tab_key(
     repo: &git2::Repository,
     diff_cache: &cache::DiffCache,
 ) -> KeyAction {
-    // Ctrl-modified keys
     match key.code {
         KeyCode::PageDown => {
             app.scroll_down_full_page(content_height, viewport_height);
@@ -448,7 +435,6 @@ fn handle_diff_tab_key(
         }
     }
 
-    // Diff-tab global keys
     match key.code {
         KeyCode::Tab => {
             app.toggle_sidebar();
@@ -514,7 +500,6 @@ fn handle_diff_tab_key(
         _ => {}
     }
 
-    // Focus-specific keys
     match app.focus {
         app::Focus::Sidebar => match key.code {
             KeyCode::Char('j') | KeyCode::Down => app.select_next_entry(visible),
@@ -598,7 +583,6 @@ fn sync_index_with_viewed(
 
 fn resolve_line_number(app: &app::App, file: &model::DiffFile) -> Option<usize> {
     if matches!(app.focus, app::Focus::Sidebar) {
-        // When focused on sidebar, just open at line 1
         return file
             .hunks
             .first()
@@ -689,7 +673,6 @@ fn handle_commits_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: us
 }
 
 fn handle_prs_tab_key(key: KeyEvent, app: &mut app::App, viewport_height: usize) -> KeyAction {
-    // Filter modal intercepts all keys when open
     if app.pr_filter.modal_open {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -795,7 +778,6 @@ fn run(
     loop {
         let visible = tree.flatten(&app.collapsed);
 
-        // Clamp selection if entries were hidden by collapsing
         if !visible.is_empty() && app.selected >= visible.len() {
             app.selected = visible.len() - 1;
             app.update_selected_file(&visible);
@@ -821,14 +803,12 @@ fn run(
                 diff_cache.diff_line_count(app.selected_file, &diff, app.view_mode);
 
             if !event::poll(poll_timeout)? {
-                // Timeout — refresh uncommitted diff if in default view
                 if is_live
                     && matches!(app.review_mode, app::ReviewMode::WorkingTree)
                     && let Ok(mut new_diff) = git::get_uncommitted_diff(repo)
                     && !diff_content_eq(&diff, &new_diff)
                 {
                     transfer_viewed(&diff, &mut new_diff);
-                    // Mark staged files as viewed (unless already transferred)
                     if let Ok(staged) = git::get_staged_files(repo) {
                         for file in &mut new_diff.files {
                             if !file.viewed && staged.contains(&file.path) {
@@ -888,7 +868,6 @@ fn run(
                                         "Pull complete".to_string()
                                     };
                                 app.status_message = Some(msg);
-                                // Refresh diff after pull
                                 if let Ok(mut new_diff) = git::get_uncommitted_diff(repo) {
                                     let staged = git::get_staged_files(repo).unwrap_or_default();
                                     for file in &mut new_diff.files {
@@ -908,7 +887,6 @@ fn run(
                                         &refreshed,
                                     );
                                 }
-                                // Refresh commit log
                                 if let Ok(log) = git::get_commit_log(repo, COMMIT_LOG_LIMIT) {
                                     app.commits = log;
                                     app.clamp_commit_selection();
@@ -960,7 +938,6 @@ fn run(
                         if let Err(e) = git::create_commit(repo, &msg) {
                             app.status_message = Some(format!("Commit failed: {}", e));
                         }
-                        // Refresh diff immediately after commit
                         if let Ok(new_diff) = git::get_uncommitted_diff(repo) {
                             diff = new_diff;
                             tree = tree::FileTree::from_files(&diff.files);
@@ -1055,7 +1032,6 @@ fn run(
                     KeyAction::Continue => {}
                 }
 
-                // Lazy-load PRs on first entry to the PR tab
                 if app.active_tab == app::Tab::PRs && !app.prs_loaded {
                     if let Some((owner, repo_name)) = github_remote.clone() {
                         app.loading_message = Some("Loading PRs...".to_string());
@@ -1096,14 +1072,12 @@ fn run(
                 }
             }
 
-            // Recompute visible tree in case a fold was toggled
             visible = tree.flatten(&app.collapsed);
             if !visible.is_empty() && app.selected >= visible.len() {
                 app.selected = visible.len() - 1;
                 app.update_selected_file(&visible);
             }
 
-            // Also keep list scroll in sync
             let area_height = (terminal.size()?.height as usize).saturating_sub(2);
             if app.active_tab == app::Tab::Commits {
                 app.ensure_commit_visible(area_height);
@@ -1111,7 +1085,6 @@ fn run(
                 app.ensure_pr_visible(area_height);
             }
 
-            // If no more events are queued, break to redraw
             if !event::poll(std::time::Duration::ZERO)? {
                 break;
             }
@@ -1119,7 +1092,6 @@ fn run(
     }
 }
 
-/// Check whether two diffs have the same content (ignoring UI state like `viewed`).
 fn diff_content_eq(a: &model::Diff, b: &model::Diff) -> bool {
     if a.files.len() != b.files.len() {
         return false;
@@ -1148,7 +1120,6 @@ fn hunk_content_eq(a: &model::Hunk, b: &model::Hunk) -> bool {
         })
 }
 
-/// Carry over `viewed` flags from the old diff to a new diff.
 fn transfer_viewed(old: &model::Diff, new: &mut model::Diff) {
     let viewed: std::collections::HashMap<&str, bool> = old
         .files
@@ -1175,12 +1146,10 @@ fn parse_pr_ref(rev: &str, repo: &git2::Repository) -> Result<(String, String, S
     };
 
     if let Some(rest) = rev.strip_prefix('#') {
-        // #42 — infer owner/repo from git remote
         let pr_number = validate(rest)?;
         let (owner, repo_name) = git::owner_repo_from_remote(repo)?;
         Ok((owner, repo_name, pr_number))
     } else if let Some((slug, number)) = rev.split_once('#') {
-        // owner/repo#42
         let pr_number = validate(number)?;
         let slug_parts: Vec<&str> = slug.splitn(2, '/').collect();
         if slug_parts.len() != 2 || slug_parts[0].is_empty() || slug_parts[1].is_empty() {

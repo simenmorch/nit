@@ -6,12 +6,10 @@ use git2::{BranchType, Delta, DiffOptions, Repository, Sort};
 
 use crate::model;
 
-/// Open the git repository that contains the current directory.
 pub fn open_repo() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent)")
 }
 
-/// Stage a file in the git index. For deleted files, removes the entry.
 pub fn stage_file(repo: &Repository, path: &str, deleted: bool) -> Result<()> {
     let mut index = repo.index().context("failed to open index")?;
     if deleted {
@@ -51,7 +49,6 @@ pub fn unstage_file(repo: &Repository, path: &str) -> Result<()> {
     }
 }
 
-/// Create a commit from the current index (staged changes) with the given message.
 pub fn create_commit(repo: &Repository, message: &str) -> Result<()> {
     let mut index = repo.index().context("failed to open index")?;
     let tree_id = index.write_tree().context("failed to write tree")?;
@@ -66,8 +63,6 @@ pub fn create_commit(repo: &Repository, message: &str) -> Result<()> {
     Ok(())
 }
 
-/// Return the set of file paths that are currently staged (in the index but
-/// different from HEAD).
 pub fn get_staged_files(repo: &Repository) -> Result<std::collections::HashSet<String>> {
     let tree = head_tree(repo)?;
     let diff = repo
@@ -82,7 +77,6 @@ pub fn get_staged_files(repo: &Repository) -> Result<std::collections::HashSet<S
     Ok(paths)
 }
 
-/// List local branch names, with the current branch first.
 #[derive(Debug, Clone)]
 pub struct BranchInfo {
     pub name: String,
@@ -148,7 +142,6 @@ pub fn list_branches(repo: &Repository) -> Result<Vec<String>> {
     Ok(current)
 }
 
-/// Check out a local branch by name.
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let refname = format!("refs/heads/{}", branch_name);
     let obj = repo
@@ -164,7 +157,6 @@ pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Pull from the remote (runs `git pull` in the repo's working directory).
 pub fn git_pull(repo: &Repository) -> Result<String> {
     let workdir = repo.workdir().context("bare repository")?;
     let output = std::process::Command::new("git")
@@ -180,7 +172,6 @@ pub fn git_pull(repo: &Repository) -> Result<String> {
     }
 }
 
-/// Push to the remote (runs `git push` in the repo's working directory).
 pub fn git_push(repo: &Repository) -> Result<String> {
     let workdir = repo.workdir().context("bare repository")?;
     let output = std::process::Command::new("git")
@@ -209,7 +200,6 @@ pub fn owner_repo_from_remote(repo: &Repository) -> Result<(String, String)> {
 }
 
 fn parse_remote_url(url: &str) -> Result<(String, String)> {
-    // SSH: git@github.com:owner/repo.git
     if let Some(path) = url.strip_prefix("git@").and_then(|s| s.split(':').nth(1)) {
         let path = path.strip_suffix(".git").unwrap_or(path);
         let parts: Vec<&str> = path.splitn(2, '/').collect();
@@ -219,7 +209,6 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
         }
     }
 
-    // HTTPS: https://github.com/owner/repo.git
     if url.starts_with("https://") || url.starts_with("http://") {
         let path = url
             .split("://")
@@ -249,7 +238,6 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
     anyhow::bail!("could not parse owner/repo from remote URL: {}", safe_url)
 }
 
-/// Get the current branch name, or "HEAD" if detached.
 pub fn branch_name(repo: &Repository) -> String {
     repo.head()
         .ok()
@@ -257,7 +245,6 @@ pub fn branch_name(repo: &Repository) -> String {
         .unwrap_or_else(|| "HEAD".to_string())
 }
 
-/// Get the HEAD commit's tree, or None if the repo has no commits yet.
 fn head_tree(repo: &Repository) -> Result<Option<git2::Tree<'_>>> {
     match repo.head() {
         Ok(head) => {
@@ -283,7 +270,6 @@ fn diff_opts() -> DiffOptions {
     opts
 }
 
-/// Resolve a revision to its tree.
 fn resolve_tree<'a>(repo: &'a Repository, rev: &str) -> Result<git2::Tree<'a>> {
     repo.revparse_single(rev)
         .with_context(|| format!("could not resolve '{}'", rev))?
@@ -302,7 +288,6 @@ fn finish_diff(diff: &mut git2::Diff) -> Result<model::Diff> {
     build_diff(diff)
 }
 
-/// Read all uncommitted changes (staged + unstaged) and return our Diff model.
 pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
     let tree = head_tree(repo)?;
 
@@ -318,7 +303,6 @@ pub fn get_uncommitted_diff(repo: &Repository) -> Result<model::Diff> {
     finish_diff(&mut diff)
 }
 
-/// Diff a single commit against its first parent.
 pub fn get_commit_diff(repo: &Repository, rev: &str) -> Result<model::Diff> {
     let obj = repo
         .revparse_single(rev)
@@ -356,7 +340,6 @@ pub fn get_commit_diff(repo: &Repository, rev: &str) -> Result<model::Diff> {
     finish_diff(&mut diff)
 }
 
-/// Diff between two revisions.
 pub fn get_range_diff(repo: &Repository, from: &str, to: &str) -> Result<model::Diff> {
     let from_tree = resolve_tree(repo, from)?;
     let to_tree = resolve_tree(repo, to)?;
@@ -368,7 +351,6 @@ pub fn get_range_diff(repo: &Repository, from: &str, to: &str) -> Result<model::
     finish_diff(&mut diff)
 }
 
-/// List recent commits from HEAD.
 pub fn get_commit_log(repo: &Repository, limit: usize) -> Result<Vec<model::CommitInfo>> {
     let mut revwalk = repo.revwalk().context("failed to create revwalk")?;
     revwalk
@@ -435,7 +417,6 @@ pub fn format_relative_time(seconds_ago: i64) -> String {
     }
 }
 
-/// Convert a git2 Diff into our model.
 fn build_diff(diff: &git2::Diff) -> Result<model::Diff> {
     let mut files: Vec<model::DiffFile> = Vec::new();
 
@@ -527,8 +508,6 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    // ── parse_remote_url ──
-
     #[test]
     fn parse_ssh_remote() {
         let (owner, repo) = parse_remote_url("git@github.com:owner/repo.git").unwrap();
@@ -562,11 +541,8 @@ mod tests {
         assert!(parse_remote_url("not-a-url").is_err());
     }
 
-    // ── Temp repo helpers ──
-
     fn init_repo(dir: &Path) -> Repository {
         let repo = Repository::init(dir).unwrap();
-        // Configure a dummy user for commits
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Test").unwrap();
         config.set_str("user.email", "test@test.com").unwrap();
@@ -593,8 +569,6 @@ mod tests {
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
             .unwrap()
     }
-
-    // ── Staging ──
 
     #[test]
     fn stage_file_adds_to_index() {
@@ -628,7 +602,6 @@ mod tests {
         let repo = init_repo(dir.path());
         commit_file(&repo, "init.txt", "init", "initial commit");
 
-        // Adding a path that does not exist in the worktree must fail loudly.
         let err = stage_file(&repo, "does-not-exist.txt", false).unwrap_err();
         assert!(err.to_string().contains("failed to add path to index"));
     }
@@ -659,7 +632,6 @@ mod tests {
 
         unstage_file(&repo, "new.txt").unwrap();
         assert!(!get_staged_files(&repo).unwrap().contains("new.txt"));
-        // The worktree file must survive an unstage.
         assert!(dir.path().join("new.txt").exists());
     }
 
@@ -691,8 +663,6 @@ mod tests {
         }
     }
 
-    // ── Diff with temp repos ──
-
     #[test]
     fn commit_diff_detects_rename() {
         let dir = tempfile::tempdir().unwrap();
@@ -700,7 +670,6 @@ mod tests {
         let body: String = (0..20).map(|i| format!("line {}\n", i)).collect();
         commit_file(&repo, "old_name.txt", &body, "initial commit");
 
-        // Rename without changing content.
         fs::remove_file(dir.path().join("old_name.txt")).unwrap();
         fs::write(dir.path().join("new_name.txt"), &body).unwrap();
         let mut index = repo.index().unwrap();
@@ -717,7 +686,6 @@ mod tests {
 
         let diff = get_commit_diff(&repo, &oid.to_string()).unwrap();
 
-        // Without find_similar this would be two entries: a delete and an add.
         assert_eq!(diff.files.len(), 1, "rename must collapse into one entry");
         assert_eq!(diff.files[0].path, "new_name.txt");
         match &diff.files[0].status {
@@ -730,9 +698,7 @@ mod tests {
     fn uncommitted_diff_new_file() {
         let dir = tempfile::tempdir().unwrap();
         let repo = init_repo(dir.path());
-        // Create initial commit so HEAD exists
         commit_file(&repo, "init.txt", "init", "initial commit");
-        // Stage a new file without committing
         fs::write(dir.path().join("new.txt"), "hello").unwrap();
         let mut index = repo.index().unwrap();
         index.add_path(Path::new("new.txt")).unwrap();
@@ -748,9 +714,7 @@ mod tests {
     fn uncommitted_diff_untracked_file_shows_content() {
         let dir = tempfile::tempdir().unwrap();
         let repo = init_repo(dir.path());
-        // Create initial commit so HEAD exists
         commit_file(&repo, "init.txt", "init", "initial commit");
-        // Create a brand new file but do NOT stage it
         fs::write(dir.path().join("untracked.txt"), "line one\nline two\n").unwrap();
 
         let diff = get_uncommitted_diff(&repo).unwrap();
@@ -759,7 +723,6 @@ mod tests {
         assert_eq!(file.path, "untracked.txt");
         assert!(matches!(file.status, model::FileStatus::Added));
         assert!(!file.is_binary);
-        // Content of the untracked file must be visible as added lines.
         assert!(!file.hunks.is_empty(), "untracked file should have hunks");
         let added: Vec<&str> = file
             .hunks
@@ -806,7 +769,6 @@ mod tests {
         let to = commit_file(&repo, "b.txt", "new", "commit 3");
 
         let diff = get_range_diff(&repo, &from.to_string(), &to.to_string()).unwrap();
-        // Should show changes between commit 1 and commit 3
         assert!(!diff.files.is_empty());
     }
 
@@ -820,8 +782,6 @@ mod tests {
         assert_eq!(diff.files.len(), 1);
         assert!(matches!(diff.files[0].status, model::FileStatus::Added));
     }
-
-    // ── Commit log ──
 
     #[test]
     fn commit_log_returns_commits_in_order() {
@@ -871,8 +831,6 @@ mod tests {
         assert_eq!(log[0].author, "Test");
     }
 
-    // ── format_relative_time ──
-
     #[test]
     fn relative_time_just_now() {
         assert_eq!(format_relative_time(30), "just now");
@@ -902,7 +860,6 @@ mod tests {
     fn empty_repo_uncommitted_staged() {
         let dir = tempfile::tempdir().unwrap();
         let repo = init_repo(dir.path());
-        // No commits yet, but stage a file
         fs::write(dir.path().join("new.txt"), "hello").unwrap();
         let mut index = repo.index().unwrap();
         index.add_path(Path::new("new.txt")).unwrap();

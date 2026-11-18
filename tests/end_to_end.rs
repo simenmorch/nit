@@ -36,8 +36,6 @@ fn commit_all(repo: &Repository, message: &str) -> git2::Oid {
         .unwrap()
 }
 
-/// Render a diff in both view modes at several terminal sizes. Panics from the
-/// renderer surface here.
 fn render_all_modes(diff: &model::Diff) {
     let ss = syntect::parsing::SyntaxSet::load_defaults_newlines();
     let theme =
@@ -92,7 +90,6 @@ fn rename_non_ascii_and_binary_survive_the_full_pipeline() {
     fs::write(dir.path().join("src/keep.rs"), "fn main() {}\n").unwrap();
     commit_all(&repo, "initial");
 
-    // A rename, a non-ASCII file, a binary file, and a tab-indented source file.
     fs::rename(
         dir.path().join("original.txt"),
         dir.path().join("renamed.txt"),
@@ -114,7 +111,6 @@ fn rename_non_ascii_and_binary_survive_the_full_pipeline() {
 
     let diff = git::get_commit_diff(&repo, &oid.to_string()).unwrap();
 
-    // Rename detection must have collapsed the delete+add pair.
     let renamed = diff
         .files
         .iter()
@@ -140,7 +136,6 @@ fn file_and_folder_name_collision_keeps_every_file() {
     fs::write(dir.path().join("conflict"), "i am a file\n").unwrap();
     commit_all(&repo, "initial");
 
-    // Replace the file `conflict` with a directory of the same name.
     fs::remove_file(dir.path().join("conflict")).unwrap();
     fs::create_dir(dir.path().join("conflict")).unwrap();
     fs::write(dir.path().join("conflict/inner.txt"), "now a folder\n").unwrap();
@@ -163,7 +158,6 @@ fn viewed_state_round_trips_through_the_index() {
     let diff = git::get_uncommitted_diff(&repo).unwrap();
     assert_eq!(diff.files.len(), 1);
 
-    // Marking viewed stages, unmarking unstages — the documented contract.
     git::stage_file(&repo, "a.txt", false).unwrap();
     assert!(git::get_staged_files(&repo).unwrap().contains("a.txt"));
 
@@ -188,7 +182,6 @@ fn selection_survives_a_file_appearing_earlier_in_the_diff() {
     let previous = a.selected_path(&before).map(str::to_owned);
     assert_eq!(previous.as_deref(), Some("z.txt"));
 
-    // A new file sorts ahead of z.txt, shifting its positional index.
     fs::write(dir.path().join("a.txt"), "new\n").unwrap();
     let after = git::get_uncommitted_diff(&repo).unwrap();
     let file_tree = tree::FileTree::from_files(&after.files);

@@ -28,21 +28,16 @@ pub struct PrMetadata {
 }
 
 pub trait RemoteProvider {
-    /// Fetch the diff for a pull/merge request.
     fn fetch_diff(&self, pr_id: &str) -> Result<model::Diff>;
 
-    /// Fetch review comments attached to lines in the diff.
     fn fetch_comments(&self, pr_id: &str) -> Result<Vec<Comment>>;
 
-    /// Fetch PR/MR metadata (title, author, state, branches).
     fn fetch_metadata(&self, pr_id: &str) -> Result<PrMetadata>;
 
-    /// Fetch a list of pull/merge requests, up to `limit`.
     fn fetch_pr_list(&self, _limit: usize) -> Result<Vec<model::PrInfo>> {
         Ok(Vec::new())
     }
 
-    /// Fetch the username of the currently authenticated user.
     fn fetch_authenticated_user(&self) -> Result<String> {
         anyhow::bail!("not supported by this provider")
     }

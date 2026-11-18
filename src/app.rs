@@ -287,7 +287,6 @@ impl App {
             .count()
     }
 
-    /// The path of the file currently shown in the diff panel, if any.
     pub fn selected_path<'a>(&self, diff: &'a crate::model::Diff) -> Option<&'a str> {
         diff.files.get(self.selected_file).map(|f| f.path.as_str())
     }
@@ -317,7 +316,6 @@ impl App {
             return;
         }
 
-        // The previously selected file is no longer in the diff.
         if self.selected_file >= diff.files.len() {
             self.selected_file = diff.files.len().saturating_sub(1);
         }
@@ -390,13 +388,10 @@ impl App {
         }
     }
 
-    /// `l` key: if on a file, focus diff. If on a folder, jump the cursor
-    /// to the file currently shown in the diff panel and focus it.
     pub fn open_file(&mut self, visible: &[FlatEntry]) {
         if let Some(entry) = visible.get(self.selected)
             && matches!(entry.kind, FlatEntryKind::Folder { .. })
         {
-            // Jump cursor to the entry matching selected_file
             for (i, e) in visible.iter().enumerate() {
                 if let FlatEntryKind::File { file_index, .. } = &e.kind
                     && *file_index == self.selected_file
@@ -409,8 +404,6 @@ impl App {
         self.focus_diff();
     }
 
-    /// Toggle viewed state for the selected entry. Returns which files changed,
-    /// split by direction, so the caller can stage/unstage accordingly.
     pub fn toggle_viewed_entry(
         &mut self,
         diff: &mut crate::model::Diff,
@@ -453,19 +446,13 @@ impl App {
         change
     }
 
-    /// Revert a `viewed` change that the caller failed to apply to the index.
     pub fn revert_viewed(&mut self, diff: &mut crate::model::Diff, index: usize, viewed: bool) {
         if let Some(file) = diff.files.get_mut(index) {
             file.viewed = viewed;
         }
     }
 
-    /// Mark the file currently shown in the diff panel as viewed and advance the
-    /// sidebar cursor to the next file. Returns the index of the file that was
-    /// marked, or `None` if there is no such file (empty diff, or `selected_file`
-    /// left dangling by a diff refresh).
-    ///
-    /// Note this marks `selected_file` — the file being displayed — not the entry
+    /// Marks `selected_file` — the file being displayed — not the entry
     /// under the cursor, which may be a folder.
     pub fn mark_viewed_and_next(
         &mut self,
@@ -475,7 +462,6 @@ impl App {
         let marked = self.selected_file;
         diff.files.get_mut(marked)?.viewed = true;
 
-        // Find the next file entry after the current sidebar selection
         for (i, entry) in visible.iter().enumerate().skip(self.selected + 1) {
             if let FlatEntryKind::File { file_index, .. } = &entry.kind {
                 self.selected = i;
@@ -546,7 +532,6 @@ impl App {
             DiffViewMode::SideBySide => DiffViewMode::Unified,
         };
 
-        // Map scroll position from old view to new view
         if let Some(file) = diff.files.get(self.selected_file) {
             let unified_starts = unified_hunk_starts(&file.hunks);
             let split_starts = cache.hunk_start_rows(self.selected_file);
@@ -642,7 +627,6 @@ impl App {
         self.committing = false;
     }
 
-    /// Build the full commit message from summary + description.
     pub fn commit_message(&self) -> String {
         let desc = self.commit_description.join("\n").trim().to_string();
         if desc.is_empty() {
@@ -928,9 +912,6 @@ impl App {
         }
     }
 
-    /// Keep the commit cursor inside the list after it has been reloaded.
-    /// Without this the selection marker vanishes and `commit_scroll` points
-    /// past the end.
     pub fn clamp_commit_selection(&mut self) {
         let count = self.commits.len();
         if count == 0 {
@@ -987,7 +968,6 @@ fn map_scroll(scroll: usize, from_starts: &[usize], to_starts: &[usize]) -> usiz
         return 0;
     }
 
-    // Find which hunk contains the scroll position
     let hunk_idx = match from_starts.binary_search(&scroll) {
         Ok(i) => i,
         Err(i) => i.saturating_sub(1),
@@ -1021,8 +1001,6 @@ mod tests {
     use crate::model::LineKind;
     use crate::test_helpers::*;
 
-    // ── Navigation ──
-
     #[test]
     fn new_app_defaults() {
         let app = App::new();
@@ -1048,7 +1026,7 @@ mod tests {
         let mut app = App::new();
         app.select_next_entry(&visible);
         app.select_next_entry(&visible);
-        app.select_next_entry(&visible); // should not exceed len-1
+        app.select_next_entry(&visible);
         assert_eq!(app.selected, visible.len() - 1);
     }
 
@@ -1063,16 +1041,14 @@ mod tests {
 
     #[test]
     fn select_next_updates_selected_file() {
-        // Two root-level files → flat entries are files directly
         let diff = make_diff(vec![
             make_file("a.rs", vec![make_hunk("@@ -1 +1 @@", vec![])]),
             make_file("b.rs", vec![make_hunk("@@ -1 +1 @@", vec![])]),
         ]);
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
-        // first entry is a.rs (file_index=0 due to alphabetical sort, but a < b so index 0)
         app.select_next_entry(&visible);
-        assert_eq!(app.selected_file, 1); // b.rs
+        assert_eq!(app.selected_file, 1);
     }
 
     #[test]
@@ -1089,10 +1065,8 @@ mod tests {
         let diff = make_diff(vec![make_file("src/a.rs", vec![])]);
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
-        // First entry is the "src" folder
         app.activate_entry(&visible);
         assert!(app.collapsed.contains("src"));
-        // Recompute visible with collapsed state and activate again
         let visible2 = crate::tree::FileTree::from_files(&diff.files).flatten(&app.collapsed);
         app.activate_entry(&visible2);
         assert!(!app.collapsed.contains("src"));
@@ -1106,8 +1080,6 @@ mod tests {
         app.open_file(&visible);
         assert!(matches!(app.focus, Focus::Diff));
     }
-
-    // ── Scrolling ──
 
     #[test]
     fn scroll_down_increments() {
@@ -1163,8 +1135,6 @@ mod tests {
         assert_eq!(app.scroll, 0);
     }
 
-    // ── Focus ──
-
     #[test]
     fn focus_diff_changes_focus() {
         let mut app = App::new();
@@ -1193,12 +1163,10 @@ mod tests {
     #[test]
     fn toggle_sidebar_shows_again() {
         let mut app = App::new();
-        app.toggle_sidebar(); // hide
-        app.toggle_sidebar(); // show
+        app.toggle_sidebar();
+        app.toggle_sidebar();
         assert!(app.show_sidebar);
     }
-
-    // ── Jump ──
 
     #[test]
     fn jump_to_top_sidebar() {
@@ -1243,10 +1211,8 @@ mod tests {
         let mut app = App::new();
         app.focus = Focus::Diff;
         app.jump_to_bottom(&visible, 100, 20);
-        assert_eq!(app.scroll, 80); // 100 - 20
+        assert_eq!(app.scroll, 80);
     }
-
-    // ── Ensure sidebar visible ──
 
     #[test]
     fn ensure_sidebar_visible_scrolls_down() {
@@ -1265,8 +1231,6 @@ mod tests {
         app.ensure_sidebar_visible(20);
         assert_eq!(app.sidebar_scroll, 2);
     }
-
-    // ── Search ──
 
     #[test]
     fn start_search_sets_mode() {
@@ -1372,10 +1336,8 @@ mod tests {
         app.search_input = "match".to_string();
         app.submit_search(&diff);
         app.prev_match(100);
-        assert_eq!(app.search.as_ref().unwrap().current, 1); // wraps to last
+        assert_eq!(app.search.as_ref().unwrap().current, 1);
     }
-
-    // ── Viewed ──
 
     #[test]
     fn toggle_viewed_marks_file() {
@@ -1399,7 +1361,6 @@ mod tests {
         assert_eq!(on.newly_viewed, vec![0]);
         assert!(on.newly_unviewed.is_empty());
 
-        // Unviewing must be reported too, so the caller can unstage.
         let off = app.toggle_viewed_entry(&mut diff, &visible);
         assert!(off.newly_viewed.is_empty());
         assert_eq!(off.newly_unviewed, vec![0]);
@@ -1421,7 +1382,6 @@ mod tests {
         ]);
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
-        // First entry is the "src" folder
         app.toggle_viewed_entry(&mut diff, &visible);
         assert!(diff.files[0].viewed);
         assert!(diff.files[1].viewed);
@@ -1437,13 +1397,10 @@ mod tests {
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
 
-        // Not all children are viewed, so this marks the rest — a.rs was
-        // already viewed and must not be reported (and so not re-staged).
         let change = app.toggle_viewed_entry(&mut diff, &visible);
         assert_eq!(change.newly_viewed, vec![1]);
         assert!(change.newly_unviewed.is_empty());
 
-        // Now all are viewed, so toggling clears both.
         let change = app.toggle_viewed_entry(&mut diff, &visible);
         assert_eq!(change.newly_unviewed, vec![0, 1]);
         assert!(change.newly_viewed.is_empty());
@@ -1456,7 +1413,6 @@ mod tests {
         diff.files[0].viewed = true;
         app.revert_viewed(&mut diff, 0, false);
         assert!(!diff.files[0].viewed);
-        // Out-of-range index must be a no-op, not a panic.
         app.revert_viewed(&mut diff, 99, true);
     }
 
@@ -1483,8 +1439,6 @@ mod tests {
 
     #[test]
     fn mark_viewed_and_next_on_folder_entry_marks_displayed_file() {
-        // The cursor sits on the "src" folder, but the diff panel is showing
-        // file 0, so that is what gets marked.
         let mut diff = make_diff(vec![make_file("src/a.rs", vec![])]);
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
@@ -1498,7 +1452,6 @@ mod tests {
 
     #[test]
     fn mark_viewed_and_next_with_stale_selection_does_not_panic() {
-        // selected/selected_file point past the end of a shrunken diff.
         let mut diff = make_diff(vec![]);
         let visible = flat_entries_for(&diff);
         let mut app = App::new();
@@ -1540,12 +1493,8 @@ mod tests {
         assert_eq!(app.selected_file, 0);
     }
 
-    // ── Selection resync after a diff refresh ──
-
     #[test]
     fn resync_selection_follows_file_when_earlier_file_is_added() {
-        // The user is reading c.rs (index 1). A refresh brings in b.rs, which
-        // sorts before it and shifts c.rs to index 2.
         let before = make_diff(vec![make_file("a.rs", vec![]), make_file("c.rs", vec![])]);
         let mut app = App::new();
         app.selected_file = 1;
@@ -1627,7 +1576,7 @@ mod tests {
         let before = make_diff(vec![make_file("src/z.rs", vec![])]);
         let mut app = App::new();
         app.selected_file = 0;
-        app.selected = 1; // 0 is the "src" folder
+        app.selected = 1;
         let path = app.selected_path(&before).map(str::to_owned);
 
         let after = make_diff(vec![
@@ -1642,8 +1591,6 @@ mod tests {
             matches!(visible[app.selected].kind, FlatEntryKind::File { file_index, .. } if file_index == app.selected_file)
         );
     }
-
-    // ── Hunk navigation ──
 
     #[test]
     fn next_hunk_jumps_forward() {
@@ -1666,12 +1613,8 @@ mod tests {
         let mut app = App::new();
         let cache = crate::cache::DiffCache::new(&diff);
         app.next_hunk(&diff, &cache);
-        // First hunk is at line_index 0, has 1 header + 2 lines = 3 total
-        // Second hunk starts at line_index 3
         assert_eq!(app.scroll, 3);
     }
-
-    // ── Tabs ──
 
     #[test]
     fn switch_tab_changes_active() {
@@ -1682,8 +1625,6 @@ mod tests {
         app.switch_tab(Tab::Diff);
         assert_eq!(app.active_tab, Tab::Diff);
     }
-
-    // ── Commit navigation ──
 
     fn sample_commits(n: usize) -> Vec<crate::model::CommitInfo> {
         (0..n)
@@ -1768,8 +1709,6 @@ mod tests {
         assert_eq!(app.commit_scroll, 2);
     }
 
-    // ── Reset diff state ──
-
     #[test]
     fn reset_diff_state_restores_defaults() {
         let mut app = App::new();
@@ -1803,8 +1742,6 @@ mod tests {
         assert!(app.search.is_none());
     }
 
-    // ── PR filter ──
-
     #[test]
     fn pr_filter_default_has_open() {
         let f = PrFilter::new();
@@ -1823,7 +1760,7 @@ mod tests {
 
     #[test]
     fn pr_filter_matches_state() {
-        let f = PrFilter::new(); // only "open"
+        let f = PrFilter::new();
         assert!(f.matches(&make_pr(1, "open", "alice")));
         assert!(!f.matches(&make_pr(2, "closed", "alice")));
     }
@@ -1839,7 +1776,7 @@ mod tests {
 
     #[test]
     fn pr_filter_mine_with_state() {
-        let mut f = PrFilter::new(); // "open"
+        let mut f = PrFilter::new();
         f.toggle("mine");
         f.github_user = Some("alice".to_string());
         assert!(f.matches(&make_pr(1, "open", "alice")));
@@ -1850,10 +1787,9 @@ mod tests {
     #[test]
     fn pr_filter_mine_alone_shows_all_states() {
         let mut f = PrFilter::new();
-        f.toggle("open"); // remove default "open"
+        f.toggle("open");
         f.toggle("mine");
         f.github_user = Some("alice".to_string());
-        // With only "mine" and no state filters, all of alice's PRs should match
         assert!(f.matches(&make_pr(1, "open", "alice")));
         assert!(f.matches(&make_pr(2, "closed", "alice")));
         assert!(!f.matches(&make_pr(3, "open", "bob")));
@@ -1863,7 +1799,6 @@ mod tests {
     fn pr_filter_mine_without_github_user() {
         let mut f = PrFilter::new();
         f.toggle("mine");
-        // github_user is None — "mine" filter rejects everything
         assert!(!f.matches(&make_pr(1, "open", "alice")));
     }
 
@@ -1871,7 +1806,6 @@ mod tests {
     fn filtered_prs_respects_filter() {
         let mut app = App::new();
         app.prs = mixed_prs();
-        // Default filter is "open" — should match PRs #1, #5
         let filtered = app.filtered_prs();
         let numbers: Vec<u64> = filtered.iter().map(|p| p.number).collect();
         assert_eq!(numbers, vec![1, 5]);
@@ -1883,7 +1817,6 @@ mod tests {
         app.prs = mixed_prs();
         app.pr_filter.toggle("mine");
         app.pr_filter.github_user = Some("alice".to_string());
-        // "open" + "mine" — only alice's open PRs
         let filtered = app.filtered_prs();
         let numbers: Vec<u64> = filtered.iter().map(|p| p.number).collect();
         assert_eq!(numbers, vec![1]);
@@ -1917,8 +1850,6 @@ mod tests {
         app.clamp_pr_selection();
         assert_eq!(app.pr_selected, 2);
     }
-
-    // ── PR navigation ──
 
     fn sample_prs(n: usize) -> Vec<crate::model::PrInfo> {
         (0..n)
@@ -2043,12 +1974,10 @@ mod tests {
         )]);
         let mut app = App::new();
         let cache = crate::cache::DiffCache::new(&diff);
-        app.scroll = 3; // at second hunk
+        app.scroll = 3;
         app.prev_hunk(&diff, &cache);
-        assert_eq!(app.scroll, 0); // back to first
+        assert_eq!(app.scroll, 0);
     }
-
-    // ── map_scroll ──
 
     #[test]
     fn map_scroll_at_hunk_boundary() {
@@ -2061,10 +1990,9 @@ mod tests {
 
     #[test]
     fn map_scroll_proportional_within_hunk() {
-        // Hunk 0: from rows 0..10, to rows 0..5
         let from = &[0, 10];
         let to = &[0, 5];
-        assert_eq!(map_scroll(5, from, to), 2); // 5/10 * 5 = 2
+        assert_eq!(map_scroll(5, from, to), 2);
     }
 
     #[test]
@@ -2079,8 +2007,6 @@ mod tests {
         let to = &[0];
         assert_eq!(map_scroll(0, from, to), 0);
     }
-
-    // ── Diff summary ──
 
     #[test]
     fn diff_summary_counts_viewed_added_removed() {

@@ -2,9 +2,7 @@ use crate::app::DiffViewMode;
 use crate::model;
 use crate::split;
 
-/// Cached per-file split-view metadata.
 pub struct DiffCache {
-    /// split_meta[file_index] = precomputed SplitMeta for that file.
     split_meta: Vec<split::SplitMeta>,
 }
 

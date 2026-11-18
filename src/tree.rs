@@ -21,7 +21,6 @@ pub struct FlatEntry {
     /// siblings after this branch — meaning a vertical `│` should be drawn
     /// in that column. Length == depth.
     pub ancestor_has_next: Vec<bool>,
-    /// True if this entry is the last child at its own depth.
     pub is_last_sibling: bool,
 }
 
@@ -180,7 +179,6 @@ mod tests {
 
     #[test]
     fn file_then_folder_with_same_name_keeps_both() {
-        // A commit that deletes file `foo` and adds `foo/bar.rs`.
         let diff = make_diff(vec![
             make_file("foo", vec![]),
             make_file("foo/bar.rs", vec![]),
@@ -190,7 +188,6 @@ mod tests {
 
     #[test]
     fn folder_then_file_with_same_name_keeps_both() {
-        // Same collision, opposite insertion order.
         let diff = make_diff(vec![
             make_file("foo/bar.rs", vec![]),
             make_file("foo", vec![]),
@@ -237,7 +234,6 @@ mod tests {
             make_file("src/b.rs", vec![]),
         ]);
         let flat = flat_entries_for(&diff);
-        // src/ folder, then a.rs, b.rs
         assert_eq!(flat.len(), 3);
         assert!(is_folder(&flat[0]));
         assert_eq!(entry_name(&flat[1]), "a.rs");
@@ -248,7 +244,6 @@ mod tests {
     fn deeply_nested() {
         let diff = make_diff(vec![make_file("a/b/c/d.rs", vec![])]);
         let flat = flat_entries_for(&diff);
-        // Chain collapses: "a/b/c" folder at depth 0 + "d.rs" file at depth 1
         assert_eq!(flat.len(), 2);
         assert_eq!(entry_name(&flat[0]), "a/b/c");
         assert_eq!(flat[0].depth, 0);
@@ -266,7 +261,6 @@ mod tests {
         let mut collapsed = HashSet::new();
         collapsed.insert("src".to_string());
         let flat = tree.flatten(&collapsed);
-        // Only the collapsed folder entry
         assert_eq!(flat.len(), 1);
         assert!(is_folder(&flat[0]));
         if let FlatEntryKind::Folder { expanded, .. } = &flat[0].kind {
@@ -284,10 +278,9 @@ mod tests {
         let mut collapsed = HashSet::new();
         collapsed.insert("src/sub".to_string());
         let flat = tree.flatten(&collapsed);
-        // src (expanded) -> sub (collapsed) -> top.rs
         assert_eq!(flat.len(), 3);
         assert_eq!(entry_name(&flat[0]), "src");
-        assert_eq!(entry_name(&flat[1]), "sub"); // collapsed, no children
+        assert_eq!(entry_name(&flat[1]), "sub");
         assert_eq!(entry_name(&flat[2]), "top.rs");
     }
 
@@ -305,7 +298,6 @@ mod tests {
             make_file("alpha/inner.rs", vec![]),
         ]);
         let flat = flat_entries_for(&diff);
-        // Folder "alpha" should come before file "zebra.rs"
         assert!(is_folder(&flat[0]));
         assert_eq!(entry_name(&flat[0]), "alpha");
     }
@@ -314,22 +306,18 @@ mod tests {
     fn file_indices_are_correct() {
         let diff = make_diff(vec![make_file("b.rs", vec![]), make_file("a.rs", vec![])]);
         let flat = flat_entries_for(&diff);
-        // BTreeMap sorts alphabetically: a.rs (file_index=1), b.rs (file_index=0)
         if let FlatEntryKind::File { file_index, .. } = &flat[0].kind {
-            assert_eq!(*file_index, 1); // a.rs was index 1 in the original vec
+            assert_eq!(*file_index, 1);
         }
         if let FlatEntryKind::File { file_index, .. } = &flat[1].kind {
-            assert_eq!(*file_index, 0); // b.rs was index 0
+            assert_eq!(*file_index, 0);
         }
     }
-
-    // ── Single-child folder-chain collapsing ──
 
     #[test]
     fn single_folder_child_chain_is_merged() {
         let diff = make_diff(vec![make_file("a/b/c/leaf.rs", vec![])]);
         let flat = flat_entries_for(&diff);
-        // 2 entries: "a/b/c" folder at depth 0, "leaf.rs" file at depth 1
         assert_eq!(flat.len(), 2);
         assert!(is_folder(&flat[0]));
         assert_eq!(entry_name(&flat[0]), "a/b/c");
@@ -340,13 +328,11 @@ mod tests {
 
     #[test]
     fn chain_breaks_when_folder_has_multiple_children() {
-        // src/ has two children (foo/ and bar.rs) so src/ does NOT merge with foo.
         let diff = make_diff(vec![
             make_file("src/foo/leaf.rs", vec![]),
             make_file("src/bar.rs", vec![]),
         ]);
         let flat = flat_entries_for(&diff);
-        // src/ folder, then foo/ folder (single file child → not merged), then leaf.rs, then bar.rs
         assert_eq!(flat.len(), 4);
         assert_eq!(entry_name(&flat[0]), "src");
         assert_eq!(entry_name(&flat[1]), "foo");
@@ -356,14 +342,11 @@ mod tests {
 
     #[test]
     fn collapsed_chain_path_is_full_for_collapse_toggle() {
-        // Folder path stored in FlatEntryKind::Folder must be the merged path
-        // so that toggle_collapse / collapsed HashSet keying still works.
         let diff = make_diff(vec![
             make_file("a/b/x.rs", vec![]),
             make_file("a/b/y.rs", vec![]),
         ]);
         let flat = flat_entries_for(&diff);
-        // a/b folder (merged), then x.rs, then y.rs
         assert_eq!(flat.len(), 3);
         if let FlatEntryKind::Folder { path, name, .. } = &flat[0].kind {
             assert_eq!(path, "a/b");
@@ -373,28 +356,22 @@ mod tests {
         }
     }
 
-    // ── Tree connector sibling info ──
-
     #[test]
     fn last_sibling_flag_correct_for_root() {
         let diff = make_diff(vec![make_file("a.rs", vec![]), make_file("b.rs", vec![])]);
         let flat = flat_entries_for(&diff);
-        assert!(!flat[0].is_last_sibling); // a.rs
-        assert!(flat[1].is_last_sibling); // b.rs
+        assert!(!flat[0].is_last_sibling);
+        assert!(flat[1].is_last_sibling);
     }
 
     #[test]
     fn ancestor_has_next_drawn_for_non_last_parents() {
-        // Two folders at root, each with one file:
-        //   src/foo.rs   (src is not last → for foo.rs ancestor_has_next = [true])
-        //   tests/bar.rs (tests is last → for bar.rs ancestor_has_next = [false])
         let diff = make_diff(vec![
             make_file("src/foo.rs", vec![]),
             make_file("tests/bar.rs", vec![]),
         ]);
         let flat = flat_entries_for(&diff);
-        // [src, foo.rs, tests, bar.rs]
-        assert_eq!(flat[1].ancestor_has_next, vec![true]); // src has tests after it
-        assert_eq!(flat[3].ancestor_has_next, vec![false]); // tests is last
+        assert_eq!(flat[1].ancestor_has_next, vec![true]);
+        assert_eq!(flat[3].ancestor_has_next, vec![false]);
     }
 }

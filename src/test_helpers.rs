@@ -51,7 +51,6 @@ pub fn make_diff(files: Vec<DiffFile>) -> Diff {
     Diff { files }
 }
 
-/// Build a simple Diff with N files, each having one hunk with a context line.
 pub fn make_simple_diff(n: usize) -> Diff {
     let files = (0..n)
         .map(|i| {
@@ -67,7 +66,6 @@ pub fn make_simple_diff(n: usize) -> Diff {
     make_diff(files)
 }
 
-/// Flatten a diff's files into FlatEntries using FileTree (no collapsed folders).
 pub fn flat_entries_for(diff: &Diff) -> Vec<FlatEntry> {
     let tree = FileTree::from_files(&diff.files);
     tree.flatten(&HashSet::new())

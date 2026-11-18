@@ -2,7 +2,6 @@ use similar::{DiffTag, TextDiff};
 
 use crate::model::{self, Hunk, LineKind};
 
-/// A segment of a line that is either changed or unchanged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineSpan {
     pub start: usize,
@@ -10,7 +9,6 @@ pub struct InlineSpan {
     pub changed: bool,
 }
 
-/// One row in the side-by-side view.
 #[derive(Debug)]
 pub enum SplitRow<'a> {
     HunkHeader(&'a str),
@@ -25,7 +23,6 @@ pub enum SplitRow<'a> {
     RightOnly(&'a model::Line),
 }
 
-/// Build side-by-side rows from hunks using simple 1:1 pairing.
 pub fn build_split_rows(hunks: &[Hunk]) -> Vec<SplitRow<'_>> {
     let mut rows = Vec::new();
     for hunk in hunks {
@@ -35,7 +32,6 @@ pub fn build_split_rows(hunks: &[Hunk]) -> Vec<SplitRow<'_>> {
     rows
 }
 
-/// Walk lines in a hunk, grouping consecutive removed/added runs, and emit rows.
 fn flush_hunk_lines<'a>(lines: &'a [model::Line], rows: &mut Vec<SplitRow<'a>>) {
     let mut removed: Vec<&'a model::Line> = Vec::new();
     let mut added: Vec<&'a model::Line> = Vec::new();
@@ -57,7 +53,6 @@ fn flush_hunk_lines<'a>(lines: &'a [model::Line], rows: &mut Vec<SplitRow<'a>>) 
     flush_pair(&mut removed, &mut added, rows);
 }
 
-/// Emit paired/left-only/right-only rows from accumulated removed+added lines, then clear both.
 fn flush_pair<'a>(
     removed: &mut Vec<&'a model::Line>,
     added: &mut Vec<&'a model::Line>,
@@ -87,8 +82,6 @@ fn flush_pair<'a>(
     added.clear();
 }
 
-/// Character-level diff between two line contents.
-/// Returns inline spans for each side marking changed vs unchanged segments.
 pub fn compute_inline_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<InlineSpan>) {
     let diff = TextDiff::from_chars(old, new);
     let mut old_spans = Vec::new();
@@ -101,7 +94,6 @@ pub fn compute_inline_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<Inlin
         let old_range = op.old_range();
         let new_range = op.new_range();
 
-        // Convert char ranges to byte ranges
         let old_start = char_offset_to_byte(old, old_range.start);
         let old_end = char_offset_to_byte(old, old_range.end);
         let new_start = char_offset_to_byte(new, new_range.start);
@@ -167,7 +159,6 @@ pub fn compute_inline_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<Inlin
         }
     }
 
-    // Ensure trailing bytes are covered
     if old_pos < old.len() {
         old_spans.push(InlineSpan {
             start: old_pos,
@@ -186,7 +177,6 @@ pub fn compute_inline_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<Inlin
     (old_spans, new_spans)
 }
 
-/// Convert a character index to a byte offset in a string.
 fn char_offset_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .nth(char_idx)
@@ -194,22 +184,19 @@ fn char_offset_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-/// Precomputed split-view metadata for a file.
 /// Avoids rebuilding full split rows (with expensive inline diffs) just for counts.
 pub struct SplitMeta {
     pub row_count: usize,
     pub hunk_starts: Vec<usize>,
 }
 
-/// Compute split-view metadata without running character-level diffs.
-/// Walks the hunk structure to count rows and record hunk start indices.
 pub fn compute_split_meta(hunks: &[Hunk]) -> SplitMeta {
     let mut row_count: usize = 0;
     let mut hunk_starts = Vec::new();
 
     for hunk in hunks {
         hunk_starts.push(row_count);
-        row_count += 1; // hunk header
+        row_count += 1;
 
         let mut removed: usize = 0;
         let mut added: usize = 0;
@@ -219,15 +206,13 @@ pub fn compute_split_meta(hunks: &[Hunk]) -> SplitMeta {
                 LineKind::Removed => removed += 1,
                 LineKind::Added => added += 1,
                 LineKind::Context => {
-                    // Flush pending removed/added as paired + leftover
                     row_count += removed.max(added);
                     removed = 0;
                     added = 0;
-                    row_count += 1; // context line
+                    row_count += 1;
                 }
             }
         }
-        // Flush trailing removed/added
         row_count += removed.max(added);
     }
 
@@ -237,12 +222,10 @@ pub fn compute_split_meta(hunks: &[Hunk]) -> SplitMeta {
     }
 }
 
-/// Count total rows in side-by-side mode for scroll bounds.
 pub fn split_row_count(hunks: &[Hunk]) -> usize {
     compute_split_meta(hunks).row_count
 }
 
-/// Compute the starting row index of each hunk in side-by-side mode.
 pub fn hunk_start_rows(hunks: &[Hunk]) -> Vec<usize> {
     compute_split_meta(hunks).hunk_starts
 }
@@ -278,7 +261,7 @@ mod tests {
             ],
         )];
         let rows = build_split_rows(&hunks);
-        assert_eq!(rows.len(), 3); // header + 2 context
+        assert_eq!(rows.len(), 3);
         assert!(matches!(rows[0], SplitRow::HunkHeader(_)));
         assert!(matches!(rows[1], SplitRow::Context(_)));
         assert!(matches!(rows[2], SplitRow::Context(_)));
@@ -396,15 +379,12 @@ mod tests {
     #[test]
     fn inline_spans_simple() {
         let (old_spans, new_spans) = compute_inline_spans("hello world", "hello earth");
-        // "hello " is unchanged, "world" vs "earth" differs
         assert!(!old_spans.is_empty());
         assert!(!new_spans.is_empty());
 
-        // The unchanged prefix should be marked as not changed
         assert!(!old_spans[0].changed);
         assert!(!new_spans[0].changed);
 
-        // There should be a changed segment
         assert!(old_spans.iter().any(|s| s.changed));
         assert!(new_spans.iter().any(|s| s.changed));
     }
@@ -470,7 +450,6 @@ mod tests {
             ),
         ];
         let rows = build_split_rows(&hunks);
-        // header + context + header + left-only = 4
         assert_eq!(rows.len(), 4);
         assert!(matches!(rows[0], SplitRow::HunkHeader(_)));
         assert!(matches!(rows[1], SplitRow::Context(_)));
