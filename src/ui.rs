@@ -18,7 +18,7 @@ use crate::model;
 use crate::split::{self, InlineSpan, SplitRow};
 use crate::tree::{FlatEntry, FlatEntryKind};
 
-const SIDEBAR_WIDTH: u16 = 40;
+const SIDEBAR_PERCENT: u16 = 33;
 const ELLIPSIS: &str = "...";
 
 /// Width of `s` in terminal cells.
@@ -60,7 +60,6 @@ fn truncate_to_width(s: &str, max: usize) -> String {
     out
 }
 
-/// Spaces needed to pad `s` out to `width` cells.
 fn pad_to_width(s: &str, width: usize) -> String {
     " ".repeat(width.saturating_sub(display_width(s)))
 }
@@ -119,7 +118,7 @@ pub fn draw(
                 if app.show_sidebar {
                     let panels = Layout::default()
                         .direction(Direction::Horizontal)
-                        .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
+                        .constraints([Constraint::Percentage(SIDEBAR_PERCENT), Constraint::Min(1)])
                         .split(outer[1]);
 
                     draw_sidebar(frame, app, diff, visible, panels[0], colors);
@@ -375,7 +374,6 @@ fn draw_file_diff(
     let is_focused = matches!(app.focus, Focus::Diff);
     let inner_height = area.height.saturating_sub(2) as usize; // subtract borders
 
-    // Get search match info from pre-computed state
     let search_info = app.search.as_ref().map(|s| {
         let current_line = s.matches.get(s.current).map(|m| m.line_index);
         (&s.match_lines, current_line)
@@ -384,7 +382,6 @@ fn draw_file_diff(
     let syntax = syntax_for_file(&file.path, ss);
 
     let vis_start = app.scroll;
-    // Build extra lines to compensate for wrapping pushing content down
     let vis_end = vis_start + inner_height * 2;
     let inner_width = area.width.saturating_sub(2) as usize;
     let wrap_indent_style = Style::default().fg(colors.fg_muted);
@@ -395,20 +392,17 @@ fn draw_file_diff(
     for hunk in &file.hunks {
         let hunk_size = 1 + hunk.lines.len();
 
-        // Skip hunks entirely above the viewport
         if line_index + hunk_size <= vis_start {
             line_index += hunk_size;
             continue;
         }
 
-        // Stop once past the viewport
         if line_index >= vis_end {
             break;
         }
 
-        // Hunk header
         if line_index >= vis_start {
-            let gutter = "         "; // 4 + 1 + 4 = 9 chars blank gutter
+            let gutter = "         ";
             let mut hunk_header_spans = vec![
                 Span::styled(gutter, Style::default().fg(colors.fg_muted)),
                 Span::styled(
@@ -503,7 +497,6 @@ fn draw_file_diff(
                     spans.push(Span::styled(content.to_string(), s));
                 }
 
-                // Apply search highlighting on matching lines
                 if let Some((all, current)) = search_info
                     && all.contains(&line_index)
                 {
@@ -538,7 +531,6 @@ fn draw_file_diff(
         )));
     }
 
-    // Sticky banner marking a file that is new to git (all content is new).
     if matches!(file.status, model::FileStatus::Added) {
         lines.insert(
             0,
@@ -583,8 +575,6 @@ fn draw_file_diff(
     );
 }
 
-/// Highlight occurrences of the search query within a list of spans.
-/// Returns owned spans since we split and rebuild the text.
 fn highlight_search_in_spans(spans: Vec<Span<'_>>, app: &App, bg: Color) -> Vec<Span<'static>> {
     let query = match &app.search {
         Some(s) => &s.query,
@@ -645,8 +635,6 @@ fn highlight_search_in_spans(spans: Vec<Span<'_>>, app: &App, bg: Color) -> Vec<
     result
 }
 
-/// Wrap a line's spans to fit within `max_width` columns.
-/// Continuation lines are indented with `indent` spaces using `indent_style`.
 fn wrap_line_spans(
     spans: Vec<Span<'_>>,
     max_width: usize,
@@ -709,7 +697,6 @@ fn wrap_line_spans(
             line_spans.push(Span::styled(" ".repeat(indent), indent_style));
         }
 
-        // Coalesce adjacent chars with the same style into spans
         let mut text = String::new();
         let mut style = styled_chars[pos].1;
         for &(c, s) in &styled_chars[pos..end] {
@@ -865,7 +852,6 @@ fn draw_commit_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCon
 fn draw_pr_list(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsConfig) {
     let filtered: Vec<&crate::model::PrInfo> = app.filtered_prs();
 
-    // Build active filter label for the title
     let active_filters: Vec<&str> = crate::app::PR_FILTER_OPTIONS
         .iter()
         .filter(|s| app.pr_filter.enabled.contains(**s))
@@ -969,13 +955,11 @@ fn draw_pr_filter_modal(frame: &mut Frame, app: &App, area: Rect, colors: &Color
     let modal_height = options.len() as u16 + 2; // borders
     let modal_width: u16 = 22;
 
-    // Position in top-right of the PR list area
     let x = area.x + area.width.saturating_sub(modal_width + 2);
     let y = area.y + 1;
 
     let modal_area = Rect::new(x, y, modal_width, modal_height);
 
-    // Clear background
     let clear = Block::default().style(Style::default().bg(colors.bg.unwrap_or(Color::Black)));
     frame.render_widget(clear, modal_area);
 
@@ -1039,7 +1023,6 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
     let bg = colors.bg.unwrap_or(Color::Black);
     let highlight_bg = colors.border_unfocused;
 
-    // Scroll so the selected item is visible
     let scroll_offset = if app.branch_modal.selected >= visible_rows {
         app.branch_modal.selected - visible_rows + 1
     } else {
@@ -1048,7 +1031,6 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Filter input line (only when > 10 branches)
     if has_filter {
         lines.push(Line::from(vec![
             Span::styled("/ ", Style::default().fg(colors.fg_accent)),
@@ -1057,7 +1039,6 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
         ]));
     }
 
-    // Commit info starts just past halfway
     let commit_col = inner_width / 2;
 
     if filtered.is_empty() {
@@ -1082,12 +1063,10 @@ fn draw_branch_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
                 Style::default().fg(colors.fg)
             };
 
-            // Truncate branch name if it would overflow into the commit column
-            let name_budget = commit_col.saturating_sub(2); // prefix
+            let name_budget = commit_col.saturating_sub(2);
             let name_display = truncate_to_width(&branch.name, name_budget);
             let name_padding = pad_to_width(&name_display, name_budget).len();
 
-            // Truncate message to fit in the remaining space
             let commit_budget = inner_width.saturating_sub(commit_col);
             let oid_and_space = display_width(&branch.short_oid) + 1;
             let msg_budget = commit_budget.saturating_sub(oid_and_space);
@@ -1327,7 +1306,6 @@ fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
     let focused_border = Style::default().fg(colors.border_focused);
     let unfocused_border = Style::default().fg(colors.border_unfocused);
 
-    // Summary field
     let summary_border = if app.commit_focus == CommitField::Summary {
         focused_border
     } else {
@@ -1352,7 +1330,6 @@ fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
             .style(Style::default().bg(bg)),
     );
 
-    // Description field
     let desc_border = if app.commit_focus == CommitField::Description {
         focused_border
     } else {
@@ -1382,7 +1359,6 @@ fn draw_commit_modal(frame: &mut Frame, app: &App, area: Rect, colors: &ColorsCo
             .style(Style::default().bg(bg)),
     );
 
-    // Clear the cells behind the modal, then fill with background
     let full_modal_area = Rect::new(x, y, modal_width, modal_height);
     frame.render_widget(Clear, full_modal_area);
     frame.render_widget(
@@ -1519,7 +1495,6 @@ fn draw_file_diff_split(
     let syntax = syntax_for_file(&file.path, ss);
 
     let vis_start = app.scroll;
-    // Build extra lines to compensate for wrapping pushing content down
     let vis_end = vis_start + inner_height * 2;
     let inner_width = left_area.width.saturating_sub(2) as usize;
     let wrap_indent_style = Style::default().fg(colors.fg_muted);
@@ -1537,7 +1512,6 @@ fn draw_file_diff_split(
             break;
         }
 
-        // Reset highlighters on hunk boundaries
         if matches!(row, SplitRow::HunkHeader(_)) {
             left_hl = HighlightLines::new(syntax, theme);
             right_hl = HighlightLines::new(syntax, theme);
@@ -1738,7 +1712,6 @@ fn draw_file_diff_split(
         right_lines.push(Line::from(msg));
     }
 
-    // Sticky banner marking a file that is new to git (all content is new).
     if matches!(file.status, model::FileStatus::Added) {
         let banner = Span::styled(
             "★ New file — entire content is new",
@@ -1796,7 +1769,6 @@ fn draw_file_diff_split(
     );
 }
 
-/// Format a single line number for the split-view gutter (4 chars + 1 space).
 fn format_split_gutter(num: Option<usize>) -> String {
     match num {
         Some(n) => format!("{:>4} ", n),
@@ -1804,7 +1776,6 @@ fn format_split_gutter(num: Option<usize>) -> String {
     }
 }
 
-/// Render a vertical scrollbar on the right edge of an area.
 fn render_scrollbar(
     frame: &mut Frame,
     area: Rect,
@@ -1829,7 +1800,6 @@ fn render_scrollbar(
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
-/// Build syntax-highlighted spans for a single line with an optional diff background.
 fn build_syntax_spans<'a>(
     content: &str,
     highlighter: &mut HighlightLines,
@@ -1871,9 +1841,6 @@ fn build_syntax_spans<'a>(
     spans
 }
 
-/// Apply inline change highlighting to syntax-highlighted spans.
-/// Splits spans at InlineSpan boundaries and applies highlight_bg to changed segments.
-/// The prefix span (index 0) is not modified.
 fn apply_inline_highlight<'a>(
     spans: Vec<Span<'a>>,
     inline_spans: &[InlineSpan],
@@ -1891,7 +1858,6 @@ fn apply_inline_highlight<'a>(
         result.push(prefix);
     }
 
-    // Collect remaining spans and track byte positions (relative to content, not prefix)
     let remaining: Vec<Span<'a>> = span_iter.collect();
     let mut content_offset: usize = 0;
 
@@ -1903,7 +1869,6 @@ fn apply_inline_highlight<'a>(
 
         let mut pos = span_start;
         for inline in inline_spans {
-            // Find overlap between this span segment and this inline span
             let overlap_start = pos.max(inline.start);
             let overlap_end = span_end.min(inline.end);
 
@@ -1911,13 +1876,11 @@ fn apply_inline_highlight<'a>(
                 continue;
             }
 
-            // Emit any part before this inline span
             if pos < overlap_start {
                 let s = &span_text[pos - span_start..overlap_start - span_start];
                 result.push(Span::styled(s.to_string(), base_style));
             }
 
-            // Emit the overlapping part with highlight
             let s = &span_text[overlap_start - span_start..overlap_end - span_start];
             let style = if inline.changed {
                 base_style.bg(highlight_bg)
@@ -1929,7 +1892,6 @@ fn apply_inline_highlight<'a>(
             pos = overlap_end;
         }
 
-        // Emit any remaining part after all inline spans
         if pos < span_end {
             let s = &span_text[pos - span_start..];
             result.push(Span::styled(s.to_string(), base_style));
@@ -1941,7 +1903,6 @@ fn apply_inline_highlight<'a>(
     result
 }
 
-/// Count the total number of rendered lines for a file's diff.
 pub fn diff_line_count(file: &model::DiffFile, view_mode: DiffViewMode) -> usize {
     match view_mode {
         DiffViewMode::Unified => file.hunks.iter().map(|h| 1 + h.lines.len()).sum(),
@@ -2194,11 +2155,8 @@ mod tests {
                 make_hunk("@@", vec![make_line(LineKind::Added, "c", None, Some(3))]),
             ],
         );
-        // 2 hunks: (1 header + 2 lines) + (1 header + 1 line) = 5
         assert_eq!(diff_line_count(&file, DiffViewMode::Unified), 5);
     }
-
-    // ── Display width helpers ──
 
     #[test]
     fn display_width_counts_cells_not_bytes() {
@@ -2296,7 +2254,6 @@ mod tests {
         let row_text =
             |y: u16| -> String { (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>() };
 
-        // Find the two commit rows and check the dates end at the same column.
         let rows: Vec<String> = (0..12).map(row_text).collect();
         let ascii_row = rows.iter().find(|r| r.contains("ascii only")).unwrap();
         let nordic_row = rows.iter().find(|r| r.contains("blåbær")).unwrap();
@@ -2316,11 +2273,8 @@ mod tests {
         );
     }
 
-    // ── Sidebar helpers ──
-
     #[test]
     fn stats_padding_fills_to_right_edge() {
-        // inner_width 40, prefix takes 20, stats text "+12 -3" is 6 chars
         let padding = stats_padding(40, 20, 6);
         assert_eq!(padding, 14);
     }
